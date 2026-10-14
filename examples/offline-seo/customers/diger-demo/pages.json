@@ -1,0 +1,1 @@
+{"customer_id":"diger-demo","synthetic":true,"source":"wordpress-fixture","pages":[{"customer_id":"diger-demo","id":1,"url":"https://other.invalid/","html":"<html><head><title>Diğer müşteri</title></head><body>OTHER_CUSTOMER_SENTINEL</body></html>"}]}

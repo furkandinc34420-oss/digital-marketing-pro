@@ -1,0 +1,7 @@
+{
+  "customer_id": "demo-musteri",
+  "name": "Demo Müşteri",
+  "synthetic": true,
+  "source": "wordpress-fixture",
+  "site_url": "https://demo.invalid"
+}

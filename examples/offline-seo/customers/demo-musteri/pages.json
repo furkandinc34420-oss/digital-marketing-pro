@@ -1,0 +1,29 @@
+{
+  "customer_id": "demo-musteri",
+  "synthetic": true,
+  "source": "wordpress-fixture",
+  "pages": [
+    {
+      "customer_id": "demo-musteri",
+      "id": 1,
+      "url": "https://demo.invalid/",
+      "html": "<!doctype html><html lang='tr'><head><title>Demo</title><link rel='canonical' href='https://demo.invalid/'><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h1>Demo Müşteri</h1><p>Bu sayfa tamamen kurgusal test verisidir.</p></body></html>",
+      "suggested_seo": {
+        "title": "Demo Müşteri | Kurgusal SEO Test Sayfası",
+        "description": "Demo Müşteri için hazırlanmış kurgusal test sayfası. SEO önerilerini çevrimdışı inceleyin; burada gerçek hizmet, müşteri veya canlı site bulunmaz."
+      }
+    },
+    {
+      "customer_id": "demo-musteri",
+      "id": 2,
+      "url": "https://demo.invalid/hizmetler/",
+      "html": "<!doctype html><html lang='tr'><head><title>Demo Müşteri | Kurgusal Hizmetler Sayfası</title><meta name='description' content='Bu hizmetler sayfası yalnızca çevrimdışı SEO testi için hazırlanmıştır. Gerçek ürün, hizmet veya müşteri verisi içermez; tüm bilgiler kurgusaldır.'><link rel='canonical' href='https://demo.invalid/hizmetler/'><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h1>Kurgusal hizmetler</h1></body></html>"
+    },
+    {
+      "customer_id": "demo-musteri",
+      "id": 3,
+      "url": "https://demo.invalid/taslak/",
+      "html": "<!doctype html><html lang='tr'><head><meta name='robots' content='noindex'></head><body><h1>Yayımlanmamış kurgusal taslak</h1></body></html>"
+    }
+  ]
+}
