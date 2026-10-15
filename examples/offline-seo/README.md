@@ -67,8 +67,11 @@ taraması desteği değildir.
 
 ## Sonraki aşama
 
-Önce gerçek müşteri izolasyonu için ayrı çalışma ortamı ve yetkilendirme kurun.
-Ardından yalnızca test WordPress ortamında salt okunur bağlantı ekleyin.
+İkinci aşamadaki [konteyner işçileri](isolation/README.md), iki kurgusal müşteri
+için işletim sistemi düzeyinde ayrı süreç alanları sağlar. Yukarıdaki doğrudan
+analiz komutu otomatik olarak konteynere girmez; uygulama seviyesinde sınırlıdır.
+Sonraki adım yönetici/işçi sınırını incelemek ve müşteri kimliği ile görev
+yetkilerini tasarlamaktır. Gerçek müşteri üretim güvenliği henüz tamamlanmamıştır.
 Canlı yazma, onay hizmeti, GEO, Ads ve otomatik raporlama bu örnekte yoktur.
 
 ## Tam test paketini harici ağ olmadan çalıştırma
@@ -78,7 +81,8 @@ kullanır. `tests/offline_guard` yüklendiği CPython sürecinde seçili denetim
 olaylarını kontrol eder: `socket.getaddrinfo`, `gethostbyname`, `gethostbyaddr`,
 `socket.connect` ve UDP `socket.sendto`. Harici DNS ve bu yollarla yapılan harici
 bağlantı/gönderimler reddedilir; yalnızca makine içi loopback testlerine izin
-verilir. Yerel TCP/UDP ve harici işlem reddi testlerle doğrulanır.
+verilir. Yerel Unix soketlerine dosya sistemi IPC'si olarak izin verilir; bunların
+yetkilerini bu yardımcı denetlemez. Yerel TCP/UDP ve harici işlem reddi testlerle doğrulanır.
 
 Bu yardımcı bütün ağ yollarını kapatmaz: `sendmsg`, yerel kod/uzantılar, Python
 dışı alt programlar veya yardımcı yüklenmeden başlatılan süreçler kapsam dışıdır.

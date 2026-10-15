@@ -28,6 +28,56 @@ class SandboxError(ValueError):
     """Invalid fixture or attempted scope escape."""
 
 
+def read_bounded_file(root: Path, components: tuple[str, ...], limit=MAX_FILE_BYTES) -> bytes:
+    """Snapshot a regular single-link file through no-follow directory descriptors.
+
+    The caller owns the trusted root; every relative path component is checked.
+    """
+    if not components or any(not isinstance(p, str) or not p or p in {".", ".."}
+                             or "/" in p or "\\" in p for p in components):
+        raise SandboxError("Invalid relative file path")
+    if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
+            or os.open not in os.supports_dir_fd):
+        raise SandboxError("Secure reads require POSIX no-follow directory opens")
+    directories = []
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        directories.append(open_descriptor(root, flags))
+        for component in components[:-1]:
+            directories.append(open_descriptor(component, flags, dir_fd=directories[-1]))
+        fd = open_descriptor(components[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=directories[-1])
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise SandboxError("Only regular files with a single hard link are accepted")
+            if before.st_size > limit:
+                raise SandboxError("File exceeds byte limit")
+            raw = bytearray()
+            while len(raw) <= limit:
+                chunk = os.read(fd, min(65536, limit + 1 - len(raw)))
+                if not chunk:
+                    break
+                raw.extend(chunk)
+            after = os.fstat(fd)
+            if len(raw) > limit:
+                raise SandboxError("File exceeds byte limit")
+            if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                raise SandboxError("File changed during read")
+            current = os.stat(components[-1], dir_fd=directories[-1], follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
+                raise SandboxError("File replaced during read")
+            return bytes(raw)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise SandboxError("Cannot securely read file") from exc
+    finally:
+        for directory in reversed(directories):
+            os.close(directory)
+
+
 @dataclass(frozen=True)
 class TenantScope:
     """An explicitly bound customer; no global active-brand fallback."""
@@ -40,53 +90,14 @@ class TenantScope:
             raise SandboxError("Invalid customer ID")
         object.__setattr__(self, "root", Path(self.root).resolve(strict=True))
 
-    def read(self, filename: str) -> tuple[dict, str]:
+    def read_bytes(self, filename: str) -> bytes:
+        """Bounded, no-follow snapshot for analysis and isolation packaging."""
         if filename not in {"profile.json", "pages.json"}:
             raise SandboxError("Only fixed sandbox input files are allowed")
-        # Descriptor-relative opens avoid check-then-open symlink substitution.
-        # Fail closed on platforms without the required POSIX primitives.
-        if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
-                or os.open not in os.supports_dir_fd):
-            raise SandboxError("Secure offline reads require POSIX no-follow directory opens")
-        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-        try:
-            root_fd = open_descriptor(self.root, directory_flags)
-        except OSError as exc:
-            raise SandboxError("Cannot securely open fixture root") from exc
-        try:
-            tenant_fd = open_descriptor(self.customer_id, directory_flags, dir_fd=root_fd)
-            try:
-                fd = open_descriptor(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                                     dir_fd=tenant_fd)
-                try:
-                    before = os.fstat(fd)
-                    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-                        raise SandboxError("Only regular files with a single hard link are accepted")
-                    if before.st_size > MAX_FILE_BYTES:
-                        raise SandboxError("Fixture exceeds file size limit")
-                    raw = bytearray()
-                    while len(raw) <= MAX_FILE_BYTES:
-                        chunk = os.read(fd, min(65536, MAX_FILE_BYTES + 1 - len(raw)))
-                        if not chunk:
-                            break
-                        raw.extend(chunk)
-                    after = os.fstat(fd)
-                    if len(raw) > MAX_FILE_BYTES:
-                        raise SandboxError("Fixture exceeds file size limit")
-                    if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-                            after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-                        raise SandboxError("Fixture changed during read")
-                    current = os.stat(filename, dir_fd=tenant_fd, follow_symlinks=False)
-                    if (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
-                        raise SandboxError("Fixture replaced during read")
-                finally:
-                    os.close(fd)
-            finally:
-                os.close(tenant_fd)
-        except OSError as exc:
-            raise SandboxError("Cannot securely read fixture file") from exc
-        finally:
-            os.close(root_fd)
+        return read_bounded_file(self.root, (self.customer_id, filename))
+
+    def read(self, filename: str) -> tuple[dict, str]:
+        raw = self.read_bytes(filename)
         data = json.loads(raw.decode("utf-8-sig"))
         if not isinstance(data, dict) or data.get("customer_id") != self.customer_id:
             raise SandboxError("Customer ownership mismatch")
