@@ -232,8 +232,9 @@ class DockerLab:
             common[str(path).lstrip("/")] = content
         for name in ("offline_seo.py", "tech-seo-auditor.py", "_common.py"):
             common["app/" + name] = (seo.read_bounded_file(REPO, ("scripts", name), MAX_RUNTIME_FILE), 0o644)
-        common["app/worker.py"] = (seo.read_bounded_file(
-            REPO, ("examples", "offline-seo", "isolation", "worker.py"), MAX_RUNTIME_FILE), 0o644)
+        for name in ("worker.py", "content_seo.py", "content_schema.py"):
+            common["app/" + name] = (seo.read_bounded_file(
+                REPO, ("examples", "offline-seo", "isolation", name), MAX_RUNTIME_FILE), 0o644)
         with tempfile.TemporaryDirectory(prefix="dmp-isolation-") as tmp:
             for customer in CUSTOMERS:
                 bundle = Path(tmp) / (customer + ".tar")
@@ -296,7 +297,7 @@ class DockerLab:
             raise RuntimeError("Unsafe container configuration: " + ", ".join(failed))
 
     def run(self, customer, action):
-        if customer not in CUSTOMERS or action not in {"analyze", "probe"}:
+        if customer not in CUSTOMERS or action not in {"analyze", "content", "probe"}:
             raise ValueError("Unknown customer or action")
         if customer not in self.images:
             raise IsolationUnavailable("Customer environment has not been prepared")

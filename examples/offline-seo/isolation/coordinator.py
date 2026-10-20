@@ -16,6 +16,7 @@ import stat
 from typing import Protocol
 
 from runner import CUSTOMERS, DockerLab, MAX_COMMAND_OUTPUT
+from content_schema import validate_content_result
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ class Specialist(Protocol):
 
 
 class SeoSpecialist:
+    action = "analyze"
+
     def execute(self, customer):
         return self.execute_snapshot(customer, DockerLab()._customer_snapshots())
 
@@ -56,7 +59,11 @@ class SeoSpecialist:
         # Package the exact bytes fingerprinted by the coordinator, not reopened files.
         lab._customer_snapshots = lambda: snapshots
         with lab as active:
-            return active.run(customer, "analyze")
+            return active.run(customer, self.action)
+
+
+class ContentSeoSpecialist(SeoSpecialist):
+    action = "content"
 
 
 def _private(info):
@@ -174,7 +181,7 @@ class TaskStore:
 class Coordinator:
     def __init__(self, state_root):
         self.store = TaskStore(state_root)
-        self._specialists: dict[str, Specialist] = {"seo.analyze": SeoSpecialist()}
+        self._specialists: dict[str, Specialist] = {"seo.analyze": SeoSpecialist(), "seo.content": ContentSeoSpecialist()}
 
     @staticmethod
     def _check(caller, customer, task_id):
@@ -188,14 +195,24 @@ class Coordinator:
         if row is None:
             raise KeyError("Task not found in this customer scope")
         record = dict(row)
+        if record['result'] is not None and len(record['result'].encode('utf-8')) > MAX_COMMAND_OUTPUT:
+            raise ValueError('Stored result exceeds byte budget')
         record["result"] = json.loads(record["result"]) if record["result"] is not None else None
+        if record['status'] == 'succeeded' and record['result'] is None:
+            raise ValueError('Successful task has no result')
         if record['result'] is not None:
-            Coordinator._validate_result(record['result'], customer)
+            Coordinator._validate_result(record['result'], customer, record['operation'])
         return record
 
     @staticmethod
-    def _validate_result(result, customer):
+    def _validate_result(result, customer, operation="seo.analyze"):
+        if not isinstance(result, dict) or not isinstance(result.get('result'), dict):
+            raise ValueError('Invalid worker result envelope')
         report = result["result"]
+        if operation == 'seo.content':
+            validate_content_result(report, customer)
+        elif operation != 'seo.analyze' or report.get('operation') not in (None, 'seo.analyze'):
+            raise ValueError('Unexpected result operation')
         if (report.get("customer_id") != customer or report.get("synthetic") is not True
                 or report.get("mode") != "proposal-only" or report.get("connection") != "none"):
             raise ValueError("Worker result identity or offline policy mismatch")
@@ -243,7 +260,7 @@ class Coordinator:
                 specialist = self._specialists[operation]
                 result = (specialist.execute_snapshot(customer, snapshots) if isinstance(specialist, SeoSpecialist)
                           else specialist.execute(customer))
-                self._validate_result(result, customer)
+                self._validate_result(result, customer, operation)
                 encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
                 if len(encoded.encode("utf-8")) > MAX_COMMAND_OUTPUT:
                     raise ValueError("Result exceeds byte limit")
@@ -268,13 +285,15 @@ def main():
     parser.add_argument("--customer", choices=CUSTOMERS, required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--action", choices=("run", "status"), default="run")
+    parser.add_argument("--operation", choices=("seo.analyze", "seo.content"), default="seo.analyze")
     args = parser.parse_args()
     # Local operator is the trust boundary. These flags are NOT authentication.
     caller = TrustedCaller("local-demo-operator", frozenset({args.customer}))
     coordinator = Coordinator(args.state_root)
     method = coordinator.run if args.action == "run" else coordinator.get
     try:
-        record = method(caller, args.customer, args.task_id)
+        record = (method(caller, args.customer, args.task_id, args.operation) if args.action == "run"
+                  else method(caller, args.customer, args.task_id))
     except TaskConflict:
         print(json.dumps({'error': 'task_input_conflict'}))
         return 4

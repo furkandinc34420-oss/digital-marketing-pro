@@ -144,3 +144,9 @@ yerine sayılmaz. Docker ayar kontrolleri yıkıcı CPU/OOM stres testi değildi
 Müşteri başına SQLite görev kaydı, yetkili çağıran sınırı, tekrar önleme ve kesinti
 kuralları için [Baş Koordinatör kullanım belgesine](COORDINATOR.md) bakın. Bu katman
 SEO işlerini yukarıdaki aynı Docker izolasyonu üzerinden yürütür.
+
+## Anahtar kelime ve içerik SEO (dördüncü aşama)
+
+Koordinatördeki `seo.content` işlemi için [kullanım ve ölçüm sınırları](CONTENT_SEO.md).
+Teknik SEO işlemi `seo.analyze` olarak korunur; iki yetenek aynı Docker güvenlik
+kontrollerini ve müşteri başına görev kaydını kullanır.

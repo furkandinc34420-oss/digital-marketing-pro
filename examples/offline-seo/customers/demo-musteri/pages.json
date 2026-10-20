@@ -11,19 +11,22 @@
       "suggested_seo": {
         "title": "Demo Müşteri | Kurgusal SEO Test Sayfası",
         "description": "Demo Müşteri için hazırlanmış kurgusal test sayfası. SEO önerilerini çevrimdışı inceleyin; burada gerçek hizmet, müşteri veya canlı site bulunmaz."
-      }
+      },
+      "primary_keyword": "kurgusal SEO testi"
     },
     {
       "customer_id": "demo-musteri",
       "id": 2,
       "url": "https://demo.invalid/hizmetler/",
-      "html": "<!doctype html><html lang='tr'><head><title>Demo Müşteri | Kurgusal Hizmetler Sayfası</title><meta name='description' content='Bu hizmetler sayfası yalnızca çevrimdışı SEO testi için hazırlanmıştır. Gerçek ürün, hizmet veya müşteri verisi içermez; tüm bilgiler kurgusaldır.'><link rel='canonical' href='https://demo.invalid/hizmetler/'><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h1>Kurgusal hizmetler</h1></body></html>"
+      "html": "<!doctype html><html lang='tr'><head><title>Demo Müşteri | Kurgusal Hizmetler Sayfası</title><meta name='description' content='Bu hizmetler sayfası yalnızca çevrimdışı SEO testi için hazırlanmıştır. Gerçek ürün, hizmet veya müşteri verisi içermez; tüm bilgiler kurgusaldır.'><link rel='canonical' href='https://demo.invalid/hizmetler/'><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h1>Kurgusal hizmetler</h1></body></html>",
+      "primary_keyword": "kurgusal hizmetler"
     },
     {
       "customer_id": "demo-musteri",
       "id": 3,
       "url": "https://demo.invalid/taslak/",
-      "html": "<!doctype html><html lang='tr'><head><meta name='robots' content='noindex'></head><body><h1>Yayımlanmamış kurgusal taslak</h1></body></html>"
+      "html": "<!doctype html><html lang='tr'><head><meta name='robots' content='noindex'></head><body><h1>Yayımlanmamış kurgusal taslak</h1></body></html>",
+      "primary_keyword": "kurgusal taslak"
     }
   ]
 }

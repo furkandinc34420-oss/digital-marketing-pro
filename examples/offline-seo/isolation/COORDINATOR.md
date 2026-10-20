@@ -1,7 +1,7 @@
 # Baş Koordinatör: ilk çevrimdışı sürüm
 
 Bu deterministik Python yöneticisi bir yapay zekâ modeli çağırmaz; ücretli API,
-WordPress bağlantısı veya canlı yazma yoktur. Yalnızca `seo.analyze` desteklenir.
+WordPress bağlantısı veya canlı yazma yoktur. `seo.analyze` ve `seo.content` desteklenir.
 SEO uzmanı mevcut `DockerLab` üzerinden analiz yapar; güvenlik ayarları, müşteri
 imajları ve temizleme kontrolleri değiştirilmez. SQLite dosyaları işçiye verilmez.
 
@@ -118,3 +118,10 @@ bekleyen sahte uzman kullanır; gerçek Docker işçisinin zorla kapanma sonras�
 temizlendiği iddiasında bulunmaz ve Docker kaynağı oluşturmaz. Normal iki müşteri
 SEO entegrasyonu ayrıca gerçek Docker ile çalıştırılır. Zorla kapanmada gerçek
 Docker kaynaklarının otomatik kurtarılması hâlâ yoktur.
+
+## İkinci SEO yeteneği
+
+Dördüncü aşamada `seo.content` eklendi. CLI'da `--operation seo.content` seçin;
+varsayılan işlem `seo.analyze` olarak kalır. İki işlem aynı kaynak özeti, görev
+çakışması, yetki ve Docker güvenlik kontrollerinden geçer. Ayrıntılar için
+[anahtar kelime ve içerik SEO belgesi](CONTENT_SEO.md). GEO, Ads ve Meta eklenmedi.
