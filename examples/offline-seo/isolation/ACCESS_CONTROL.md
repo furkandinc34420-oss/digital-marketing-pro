@@ -119,3 +119,10 @@ Salt-okunur RAM görüntüsü, Python SQLite modülünün `Connection.deserializ
 yeteneğini gerektirir. Bu yetenek bulunmayan kurulumlarda güvenliği gevşeten disk
 bağlantısına dönülmez; okuma hata vererek kapanır. Mevcut bulut ortamında özellik
 vardır ve gerçek veritabanı testleriyle doğrulanır.
+
+## İsteğe bağlı kalıcı politika deposu
+
+`PersistentAccessDirectory` kullanıcı, müşteri, rol ve üyelikleri SQLite'ta
+saklar. [Kalıcı depo kurulumu ve güvenlik sınırları](IDENTITY_STORE.md).
+Bellek içi sürüm ve mevcut CLI kullanılmaya devam eder. Oturumlar ve erişim
+olayları kalıcı sürümde de bellekte kalır; gerçek OIDC eklenmez.
