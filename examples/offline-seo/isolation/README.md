@@ -150,3 +150,8 @@ SEO işlerini yukarıdaki aynı Docker izolasyonu üzerinden yürütür.
 Koordinatördeki `seo.content` işlemi için [kullanım ve ölçüm sınırları](CONTENT_SEO.md).
 Teknik SEO işlemi `seo.analyze` olarak korunur; iki yetenek aynı Docker güvenlik
 kontrollerini ve müşteri başına görev kaydını kullanır.
+
+## Teknik SEO uzmanı
+
+Yeni `seo.technical` için [kullanım ve güvenlik sınırları](TECHNICAL_SEO.md).
+Bu işlem canonical, robots meta, H1 ve bağlantıları yalnızca HTML üzerinden inceler.

@@ -58,16 +58,19 @@ def probe(customer, host_fixtures):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--customer", choices=["demo-musteri", "diger-demo"], required=True)
-    parser.add_argument("--action", choices=["analyze", "content", "probe"], required=True)
+    parser.add_argument("--action", choices=["analyze", "content", "technical", "probe"], required=True)
     parser.add_argument("--host-fixtures", required=True)
     args = parser.parse_args()
-    if args.action in {"analyze", "content"}:
+    if args.action in {"analyze", "content", "technical"}:
         sys.path.insert(0, "/app")
         import offline_seo
         scope = offline_seo.TenantScope(Path("/data/customers"), args.customer)
         if args.action == "content":
             import content_seo
             result = content_seo.analyze(scope)
+        elif args.action == "technical":
+            import technical_seo
+            result = technical_seo.analyze(scope)
         else:
             result = offline_seo.analyze(scope)
     else:

@@ -17,6 +17,7 @@ from typing import Protocol
 
 from runner import CUSTOMERS, DockerLab, MAX_COMMAND_OUTPUT
 from content_schema import validate_content_result
+from technical_schema import validate_technical_result
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,10 @@ class SeoSpecialist:
 
 class ContentSeoSpecialist(SeoSpecialist):
     action = "content"
+
+
+class TechnicalSeoSpecialist(SeoSpecialist):
+    action = "technical"
 
 
 def _private(info):
@@ -181,7 +186,9 @@ class TaskStore:
 class Coordinator:
     def __init__(self, state_root):
         self.store = TaskStore(state_root)
-        self._specialists: dict[str, Specialist] = {"seo.analyze": SeoSpecialist(), "seo.content": ContentSeoSpecialist()}
+        self._specialists: dict[str, Specialist] = {
+            "seo.analyze": SeoSpecialist(), "seo.content": ContentSeoSpecialist(),
+            "seo.technical": TechnicalSeoSpecialist()}
 
     @staticmethod
     def _check(caller, customer, task_id):
@@ -211,6 +218,8 @@ class Coordinator:
         report = result["result"]
         if operation == 'seo.content':
             validate_content_result(report, customer)
+        elif operation == 'seo.technical':
+            validate_technical_result(report, customer)
         elif operation != 'seo.analyze' or report.get('operation') not in (None, 'seo.analyze'):
             raise ValueError('Unexpected result operation')
         if (report.get("customer_id") != customer or report.get("synthetic") is not True
@@ -285,7 +294,7 @@ def main():
     parser.add_argument("--customer", choices=CUSTOMERS, required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--action", choices=("run", "status"), default="run")
-    parser.add_argument("--operation", choices=("seo.analyze", "seo.content"), default="seo.analyze")
+    parser.add_argument("--operation", choices=("seo.analyze", "seo.content", "seo.technical"), default="seo.analyze")
     args = parser.parse_args()
     # Local operator is the trust boundary. These flags are NOT authentication.
     caller = TrustedCaller("local-demo-operator", frozenset({args.customer}))

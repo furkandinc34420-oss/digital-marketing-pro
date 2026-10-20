@@ -125,3 +125,10 @@ Dördüncü aşamada `seo.content` eklendi. CLI'da `--operation seo.content` se�
 varsayılan işlem `seo.analyze` olarak kalır. İki işlem aynı kaynak özeti, görev
 çakışması, yetki ve Docker güvenlik kontrollerinden geçer. Ayrıntılar için
 [anahtar kelime ve içerik SEO belgesi](CONTENT_SEO.md). GEO, Ads ve Meta eklenmedi.
+
+## Teknik SEO uzmanı
+
+`seo.technical` işlemi canonical, robots meta, H1 ve bağlantıları çevrimdışı
+inceler. `--operation seo.technical` ile seçilir; varsayılan işlem değişmez.
+[Ölçülen kanıtlar ve sınırlar](TECHNICAL_SEO.md). Üç SEO işlemi aynı yetki, görev
+kaydı, girdi çakışması ve Docker güvenlik kurallarından geçer.
