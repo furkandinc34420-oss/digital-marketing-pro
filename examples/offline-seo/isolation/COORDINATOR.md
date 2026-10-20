@@ -138,3 +138,9 @@ kaydı, girdi çakışması ve Docker güvenlik kurallarından geçer.
 `--operation seo.audit` üç SEO uzmanını aynı kaynak görüntüsüyle yönetir; bağımsız
 uzman işlemleri korunur. Kısmi başarısızlık, ara kayıt, kaynak kanıtları ve rapor
 sınırları için [birleşik denetim belgesi](SEO_AUDIT.md).
+
+## Çevrimdışı erişim katmanı
+
+Yeni `AccessService`, kimlik sağlayıcı arayüzü ve her istekte güncel müşteri/rol
+kontrolü için [prototipin güven sınırları](ACCESS_CONTROL.md). Mevcut CLI güvenilir
+yerel kullanım aracıdır; bu katman gerçek kullanıcı girişi veya API açmaz.

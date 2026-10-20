@@ -220,6 +220,59 @@ class TaskStore:
                 os.close(fd)
 
 
+    @contextmanager
+    def readonly(self, customer):
+        """Pinned existing files only; inspect a bounded SQLite copy in RAM.
+
+        No SQLite connection to disk means no journal recovery, sidecar creation,
+        migrations, or metadata updates. Fail closed on unfinished disk journals.
+        """
+        if customer not in CUSTOMERS or self.root == Path('/'):
+            raise ValueError('Invalid customer state scope')
+        fds = [os.open('/', os.O_RDONLY | os.O_DIRECTORY)]
+        db = None
+        try:
+            for part in (*self.root.parts[1:], customer):
+                fds.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fds[-1]))
+            _private(os.fstat(fds[-2])); _private(os.fstat(fds[-1]))
+            directory = fds[-1]
+            for name in ('tasks.lock', 'tasks.sqlite3'):
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                fds.append(fd)
+                info = os.fstat(fd); _private(info)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_DB_BYTES:
+                    raise PermissionError('Unsafe read-only state file')
+                if name == 'tasks.lock':
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            for name in ('tasks.sqlite3-journal', 'tasks.sqlite3-wal', 'tasks.sqlite3-shm'):
+                try:
+                    os.stat(name, dir_fd=directory, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                raise PermissionError('State requires explicit maintenance')
+            raw = bytearray()
+            while True:
+                chunk = os.read(fds[-1], min(65536, MAX_DB_BYTES + 1 - len(raw)))
+                if not chunk:
+                    break
+                raw.extend(chunk)
+                if len(raw) > MAX_DB_BYTES:
+                    raise CapacityError('Read-only state exceeds byte budget')
+            db = sqlite3.connect(':memory:')
+            db.deserialize(bytes(raw))
+            db.row_factory = sqlite3.Row
+            db.execute('PRAGMA trusted_schema=OFF')
+            db.execute('PRAGMA query_only=ON')
+            if [row[0] for row in db.execute('SELECT customer FROM owner')] != [customer]:
+                raise PermissionError('Read-only database customer mismatch')
+            yield db
+        finally:
+            if db is not None:
+                db.close()
+            for fd in reversed(fds):
+                os.close(fd)
+
+
 class Coordinator:
     def __init__(self, state_root):
         self.store = TaskStore(state_root)
@@ -234,20 +287,23 @@ class Coordinator:
             raise ValueError("Invalid task ID")
 
     @staticmethod
-    def _record(db, task_id, customer):
+    def _record(db, task_id, customer, *, persist=True):
         try:
-            return Coordinator._read_record(db, task_id, customer)
+            return Coordinator._read_record(db, task_id, customer, persist=persist)
         except (LegacyAuditInput, TaskNotFound, AuditScopeMismatch):
             raise
         except (ValueError, TypeError, KeyError) as exc:
             raise AuditRecordInvalid('Invalid stored task result') from exc
 
     @staticmethod
-    def _read_record(db, task_id, customer):
+    def _read_record(db, task_id, customer, *, persist=True):
         row = db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if row is None:
             raise TaskNotFound("Task not found in this customer scope")
         record = dict(row)
+        if not persist and record['status'] == 'running':
+            record['status'] = 'interrupted'
+            record['error'] = 'Incomplete durable outcome; read-only preview, maintenance required'
         if record['result'] is not None and len(record['result'].encode('utf-8')) > MAX_COMMAND_OUTPUT:
             raise ValueError('Stored result exceeds byte budget')
         record["result"] = json.loads(record["result"]) if record["result"] is not None else None
@@ -277,8 +333,9 @@ class Coordinator:
                         item['status'] = 'interrupted'
                 report = audit_report.compose(customer, report['source_hashes'], report['page_catalog'], outcomes, record['status'])
                 record['result'] = {'result': report}
-                db.execute('UPDATE tasks SET result=? WHERE task_id=?', (json.dumps(record['result'], ensure_ascii=False), task_id))
-                db.commit()
+                if persist:
+                    db.execute('UPDATE tasks SET result=? WHERE task_id=?', (json.dumps(record['result'], ensure_ascii=False), task_id))
+                    db.commit()
             if report['execution_state'] != record['status']:
                 raise ValueError('Audit task and report status mismatch')
         if record['result'] is not None:
@@ -313,6 +370,12 @@ class Coordinator:
         with self.store.session(customer) as db:
             row = db.execute('SELECT details FROM admin_errors WHERE task_id=?', (task_id,)).fetchone()
             return json.loads(row[0]) if row else None
+
+    def peek(self, caller, customer, task_id):
+        """No persistent recovery or state creation; conservative interruption view."""
+        self._check(caller, customer, task_id)
+        with self.store.readonly(customer) as db:
+            return self._record(db, task_id, customer, persist=False)
 
     def get(self, caller, customer, task_id):
         self._check(caller, customer, task_id)
