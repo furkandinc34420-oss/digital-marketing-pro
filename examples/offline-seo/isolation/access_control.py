@@ -264,6 +264,8 @@ class AccessService(ProcessBound):
                 directory._event(action, 'failed', user)
                 raise ServiceUnavailable() from None
             directory._event(action, 'allowed', user)
+            if action == 'recommendation_source':
+                return record
             if action == 'status':
                 return {'task_id': record['task_id'], 'status': record['status']}
             return record['result'] if action == 'report' else {'task_id': record['task_id'], 'status': record['status']}
@@ -276,6 +278,35 @@ class AccessService(ProcessBound):
 
     def report(self, credential, tenant_id, task_id):
         return self._request(credential, tenant_id, task_id, 'report')
+
+    def recommendations(self, credential, tenant_id, task_id):
+        """Authorized read-only derivation; no approval or application endpoint."""
+        record = self._request(credential, tenant_id, task_id, 'recommendation_source')
+        # Bounded derivation does not need the shared policy lock. Recheck the
+        # exact session/account and current membership before releasing data.
+        try:
+            from evidence_recommendations import from_record
+            from runner import DockerLab
+            result = from_record(record, tenant_id, DockerLab()._customer_snapshots()[tenant_id])
+        except Exception:
+            self._check_process()
+            with self._directory._lock:
+                self._directory._check_process()
+                self._directory._event('recommendations', 'failed', None)
+            raise ServiceUnavailable() from None
+        self._check_process()
+        directory = self._directory
+        directory._check_process()
+        with directory._lock:
+            user = None
+            try:
+                user = directory._user(self._provider.authenticate(credential))
+                directory._authorize(user, tenant_id, False)
+            except Exception:
+                directory._event('recommendations', 'denied', user)
+                raise AccessDenied() from None
+            directory._event('recommendations', 'allowed', user)
+            return result
 
     def recover(self, credential, tenant_id, task_id):
         """Explicit persistent recovery: system admin AND tenant membership."""

@@ -126,3 +126,15 @@ vardır ve gerçek veritabanı testleriyle doğrulanır.
 saklar. [Kalıcı depo kurulumu ve güvenlik sınırları](IDENTITY_STORE.md).
 Bellek içi sürüm ve mevcut CLI kullanılmaya devam eder. Oturumlar ve erişim
 olayları kalıcı sürümde de bellekte kalır; gerçek OIDC eklenmez.
+
+## Kanıta dayalı öneri taslakları
+
+`service.recommendations(session, tenant_id, task_id)`, aynı müşteri yetkilerini
+ve yazmasız görev okumasını kullanır. Güncel kaynaklar görev özetiyle eşleşmelidir;
+taslaklar saklanmaz ve analizler yeniden çalıştırılmaz.
+[Öneri alanları, kanıt bağı ve onay sınırları](EVIDENCE_RECOMMENDATIONS.md).
+
+Öneri türetme istisnası: `recommendations` önce yetkili ve yazmasız görev okuması
+yapar, saf rapor hesaplamasında ortak politika kilidini bırakır ve sonuç dönmeden
+önce oturum/hesap/üyeliği yeniden doğrular. Arada üyelik kaldırılmışsa veya hesap
+kapatılmışsa sonuç verilmez. Diğer mevcut işlemlerin kilit davranışı değişmez.
