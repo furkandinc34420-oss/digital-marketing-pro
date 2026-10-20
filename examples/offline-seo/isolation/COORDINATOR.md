@@ -132,3 +132,9 @@ varsayılan işlem `seo.analyze` olarak kalır. İki işlem aynı kaynak özeti,
 inceler. `--operation seo.technical` ile seçilir; varsayılan işlem değişmez.
 [Ölçülen kanıtlar ve sınırlar](TECHNICAL_SEO.md). Üç SEO işlemi aynı yetki, görev
 kaydı, girdi çakışması ve Docker güvenlik kurallarından geçer.
+
+## Birleşik denetim
+
+`--operation seo.audit` üç SEO uzmanını aynı kaynak görüntüsüyle yönetir; bağımsız
+uzman işlemleri korunur. Kısmi başarısızlık, ara kayıt, kaynak kanıtları ve rapor
+sınırları için [birleşik denetim belgesi](SEO_AUDIT.md).

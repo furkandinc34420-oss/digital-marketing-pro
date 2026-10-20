@@ -18,6 +18,7 @@ from typing import Protocol
 from runner import CUSTOMERS, DockerLab, MAX_COMMAND_OUTPUT
 from content_schema import validate_content_result
 from technical_schema import validate_technical_result
+import audit_report
 
 
 @dataclass(frozen=True)
@@ -36,8 +37,44 @@ MAX_DB_BYTES = 64 * 1024 * 1024
 MAX_DIAGNOSTIC_BYTES = 16384
 
 
+def input_digest(operation, files, *, manifest=False):
+    """One canonical task fingerprint. Audit manifests contain raw-file SHA256s.
+
+    Existing standalone fingerprints remain byte-for-byte compatible. Audit v1
+    uses file hashes so durable reports can be checked without reopening sources.
+    """
+    if operation == 'seo.audit':
+        files = files if manifest else {n: hashlib.sha256(raw).hexdigest() for n, raw in files.items()}
+        if set(files) != {'profile.json', 'pages.json'} or any(
+                not isinstance(v, str) or not re.fullmatch('[a-f0-9]{64}', v) for v in files.values()):
+            raise ValueError('Invalid source manifest')
+        values = ((n, v.encode('ascii')) for n, v in sorted(files.items()))
+    else:
+        if manifest:
+            raise ValueError('Standalone tasks require raw bytes')
+        values = sorted(files.items())
+    return hashlib.sha256(operation.encode() + b'\0' + b'\0'.join(
+        name.encode() + b'\0' + raw for name, raw in values)).hexdigest()
+
+
 class TaskConflict(ValueError):
     """Existing task ID has a different immutable input digest."""
+
+
+class LegacyAuditInput(ValueError):
+    """Validated report and available raw sources prove the old fingerprint rule."""
+
+
+class AuditScopeMismatch(PermissionError, ValueError):
+    """Stored audit belongs to a different customer."""
+
+
+class AuditRecordInvalid(ValueError):
+    """Stored audit data is malformed; no raw details for the CLI."""
+
+
+class TaskNotFound(KeyError):
+    """No task exists in the authorized tenant scope."""
 
 
 class CapacityError(RuntimeError):
@@ -198,15 +235,52 @@ class Coordinator:
 
     @staticmethod
     def _record(db, task_id, customer):
+        try:
+            return Coordinator._read_record(db, task_id, customer)
+        except (LegacyAuditInput, TaskNotFound, AuditScopeMismatch):
+            raise
+        except (ValueError, TypeError, KeyError) as exc:
+            raise AuditRecordInvalid('Invalid stored task result') from exc
+
+    @staticmethod
+    def _read_record(db, task_id, customer):
         row = db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if row is None:
-            raise KeyError("Task not found in this customer scope")
+            raise TaskNotFound("Task not found in this customer scope")
         record = dict(row)
         if record['result'] is not None and len(record['result'].encode('utf-8')) > MAX_COMMAND_OUTPUT:
             raise ValueError('Stored result exceeds byte budget')
         record["result"] = json.loads(record["result"]) if record["result"] is not None else None
         if record['status'] == 'succeeded' and record['result'] is None:
             raise ValueError('Successful task has no result')
+        if record['operation'] == 'seo.audit' and record['result'] is not None:
+            report = record['result']['result']
+            if isinstance(report, dict) and report.get('customer_id') != customer:
+                raise AuditScopeMismatch('Audit customer scope mismatch')
+            audit_report.validate_audit(report, customer)
+            if input_digest('seo.audit', report['source_hashes'], manifest=True) != record['input_digest']:
+                # A mismatch alone never proves a legacy record. Require a valid
+                # report, valid lifecycle, and exact old digest of available bytes.
+                if (record['status'] == report['execution_state'] or
+                        record['status'] in {'interrupted', 'failed'} and report['execution_state'] == 'running'):
+                    files = DockerLab()._customer_snapshots()[customer]
+                    hashes = {n: hashlib.sha256(raw).hexdigest() for n, raw in files.items()}
+                    old = hashlib.sha256(b'seo.audit\0' + b'\0'.join(
+                        n.encode() + b'\0' + raw for n, raw in sorted(files.items()))).hexdigest()
+                    if hashes == report['source_hashes'] and old == record['input_digest']:
+                        raise LegacyAuditInput('Legacy audit fingerprint is incompatible')
+                raise ValueError('Stored audit source does not match task input')
+            if record['status'] in {'interrupted', 'failed'} and report['execution_state'] == 'running':
+                outcomes = {op: dict(item) for op, item in report['experts'].items()}
+                for item in outcomes.values():
+                    if item['status'] == 'running':
+                        item['status'] = 'interrupted'
+                report = audit_report.compose(customer, report['source_hashes'], report['page_catalog'], outcomes, record['status'])
+                record['result'] = {'result': report}
+                db.execute('UPDATE tasks SET result=? WHERE task_id=?', (json.dumps(record['result'], ensure_ascii=False), task_id))
+                db.commit()
+            if report['execution_state'] != record['status']:
+                raise ValueError('Audit task and report status mismatch')
         if record['result'] is not None:
             Coordinator._validate_result(record['result'], customer, record['operation'])
         return record
@@ -216,7 +290,9 @@ class Coordinator:
         if not isinstance(result, dict) or not isinstance(result.get('result'), dict):
             raise ValueError('Invalid worker result envelope')
         report = result["result"]
-        if operation == 'seo.content':
+        if operation == 'seo.audit':
+            audit_report.validate_audit(report, customer)
+        elif operation == 'seo.content':
             validate_content_result(report, customer)
         elif operation == 'seo.technical':
             validate_technical_result(report, customer)
@@ -245,15 +321,16 @@ class Coordinator:
 
     def run(self, caller, customer, task_id, operation="seo.analyze"):
         self._check(caller, customer, task_id)
-        if operation not in self._specialists:
+        if operation not in self._specialists and operation != "seo.audit":
             raise ValueError("Unsupported operation")
         snapshots = DockerLab()._customer_snapshots()
-        digest = hashlib.sha256(operation.encode() + b'\0' + b'\0'.join(
-            name.encode() + b'\0' + raw for name, raw in sorted(snapshots[customer].items()))).hexdigest()
+        digest = input_digest(operation, snapshots[customer])
         with self.store.session(customer) as db:
             existing = db.execute("SELECT operation,input_digest FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             if existing:
                 if existing[0] != operation or existing[1] != digest:
+                    if existing[0] == operation == 'seo.audit':
+                        self._record(db, task_id, customer)  # Classify only proven legacy records.
                     raise TaskConflict("Task ID conflicts with operation or source data")
                 return self._record(db, task_id, customer)
             if db.execute('SELECT count(*) FROM tasks').fetchone()[0] >= MAX_TASKS:
@@ -266,9 +343,12 @@ class Coordinator:
                        (task_id, operation, caller.caller_id, digest))
             db.commit()  # Must persist before Docker is invoked.
             try:
-                specialist = self._specialists[operation]
-                result = (specialist.execute_snapshot(customer, snapshots) if isinstance(specialist, SeoSpecialist)
-                          else specialist.execute(customer))
+                if operation == 'seo.audit':
+                    result = self._run_audit(db, customer, task_id, snapshots)
+                else:
+                    specialist = self._specialists[operation]
+                    result = (specialist.execute_snapshot(customer, snapshots) if isinstance(specialist, SeoSpecialist)
+                              else specialist.execute(customer))
                 self._validate_result(result, customer, operation)
                 encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
                 if len(encoded.encode("utf-8")) > MAX_COMMAND_OUTPUT:
@@ -282,10 +362,54 @@ class Coordinator:
                            (type(exc).__name__ + ': execution or cleanup failed; operator review required', task_id))
                 db.commit()
             else:
-                db.execute("UPDATE tasks SET status='succeeded',result=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=?",
-                           (encoded, task_id))
+                final_status = result['result']['execution_state'] if operation == 'seo.audit' else 'succeeded'
+                db.execute("UPDATE tasks SET status=?,result=?,error=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=?",
+                           (final_status, encoded, "Birleşik denetim eksik; uzman durumlarını inceleyin." if final_status == "failed" else None, task_id))
                 db.commit()
             return self._record(db, task_id, customer)
+
+
+    def _run_audit(self, db, customer, task_id, snapshots):
+        # No recursive run() calls: the parent's tenant lock covers all three steps.
+        from types import MappingProxyType
+        snapshots = MappingProxyType({tenant: MappingProxyType(dict(files)) for tenant, files in snapshots.items()})
+        hashes = {name: hashlib.sha256(raw).hexdigest() for name, raw in snapshots[customer].items()}
+        payload = json.loads(snapshots[customer]['pages.json'].decode('utf-8-sig'))
+        catalog = {str(p['id']): p['url'] for p in payload['pages']}
+        if len(catalog) != len(payload['pages']) or any(type(p['id']) is not int or p['id'] <= 0 for p in payload['pages']):
+            raise ValueError('Invalid audit source page IDs')
+        outcomes = {op: {'status': 'pending', 'result': None, 'error': None} for op in audit_report.OPERATIONS}
+        diagnostics = []
+
+        def checkpoint():
+            report = audit_report.compose(customer, hashes, catalog, outcomes, 'running')
+            # Leave space for failure/interruption labels and bounded diagnostics.
+            audit_report.bounded(report, audit_report.MAX_AUDIT_BYTES - 65536)
+            db.execute('UPDATE tasks SET result=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=?',
+                       (json.dumps({'result': report}, ensure_ascii=False), task_id))
+            db.commit()
+
+        checkpoint()
+        for op in audit_report.OPERATIONS:
+            try:
+                outcomes[op] = {'status': 'running', 'result': None, 'error': None}
+                checkpoint()
+                specialist = self._specialists[op]
+                response = specialist.execute_snapshot(customer, snapshots)
+                self._validate_result(response, customer, op)
+                report = response['result']
+                audit_report.validate_expert(op, report, customer, hashes, catalog)
+                outcomes[op] = {'status': 'succeeded', 'result': report, 'error': None}
+                checkpoint()  # Only retain a result if the whole aggregate fits.
+            except Exception as exc:
+                outcomes[op] = {'status': 'failed', 'result': None,
+                                'error': 'Analiz tamamlanamadı; yönetici incelemesi gerekiyor.'}
+                diagnostics.append({'operation': op, 'type': type(exc).__name__, 'message': str(exc)[:1000]})
+                db.execute('INSERT OR REPLACE INTO admin_errors VALUES (?,?)',
+                           (task_id, json.dumps({'expert_errors': diagnostics}, ensure_ascii=False)))
+                checkpoint()
+        state = 'succeeded' if all(x['status'] == 'succeeded' for x in outcomes.values()) else 'failed'
+        return {'result': audit_report.compose(customer, hashes, catalog, outcomes, state)}
 
 
 def main():
@@ -294,7 +418,7 @@ def main():
     parser.add_argument("--customer", choices=CUSTOMERS, required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--action", choices=("run", "status"), default="run")
-    parser.add_argument("--operation", choices=("seo.analyze", "seo.content", "seo.technical"), default="seo.analyze")
+    parser.add_argument("--operation", choices=("seo.analyze", "seo.content", "seo.technical", "seo.audit"), default="seo.analyze")
     args = parser.parse_args()
     # Local operator is the trust boundary. These flags are NOT authentication.
     caller = TrustedCaller("local-demo-operator", frozenset({args.customer}))
@@ -303,9 +427,20 @@ def main():
     try:
         record = (method(caller, args.customer, args.task_id, args.operation) if args.action == "run"
                   else method(caller, args.customer, args.task_id))
+    except LegacyAuditInput:
+        print(json.dumps({'error': 'audit_input_version_incompatible', 'message_tr':
+            'Eski denetim kaydı yeni kaynak özeti kuralıyla uyumsuz. Yeni bir görev kimliğiyle yeniden analiz başlatın.'}, ensure_ascii=False))
+        return 5
     except TaskConflict:
         print(json.dumps({'error': 'task_input_conflict'}))
         return 4
+    except (PermissionError, TaskNotFound, ValueError, OSError, sqlite3.Error) as exc:
+        code = ('audit_access_denied' if isinstance(exc, PermissionError) else
+                'audit_task_not_found' if isinstance(exc, TaskNotFound) else
+                'audit_record_or_request_invalid' if isinstance(exc, ValueError) else
+                'audit_storage_or_runtime_unavailable')
+        print(json.dumps({'error': code if args.operation == 'seo.audit' else 'coordinator_unavailable_or_invalid_request'}))
+        return 2
     except Exception:
         print(json.dumps({'error': 'coordinator_unavailable_or_invalid_request'}))
         return 2

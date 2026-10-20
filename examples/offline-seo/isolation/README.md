@@ -155,3 +155,7 @@ kontrollerini ve müşteri başına görev kaydını kullanır.
 
 Yeni `seo.technical` için [kullanım ve güvenlik sınırları](TECHNICAL_SEO.md).
 Bu işlem canonical, robots meta, H1 ve bağlantıları yalnızca HTML üzerinden inceler.
+
+## Birleşik SEO denetimi
+
+`seo.audit` için [Türkçe kullanım, rapor ve güvenlik sınırları](SEO_AUDIT.md).
