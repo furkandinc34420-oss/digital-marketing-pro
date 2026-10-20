@@ -138,3 +138,9 @@ kayıp oluşturma/silme yanıtları, kısmi temizlik hataları, sahiplik kontrol
 güvensiz ayarda başlatmama senaryoları sınanır. Bu 15 test Docker yokken de çalışır.
 Arıza testleri kontrollü sahte Docker yanıtları kullanır; gerçek izolasyonun
 yerine sayılmaz. Docker ayar kontrolleri yıkıcı CPU/OOM stres testi değildir.
+
+## Baş Koordinatör (üçüncü aşama)
+
+Müşteri başına SQLite görev kaydı, yetkili çağıran sınırı, tekrar önleme ve kesinti
+kuralları için [Baş Koordinatör kullanım belgesine](COORDINATOR.md) bakın. Bu katman
+SEO işlerini yukarıdaki aynı Docker izolasyonu üzerinden yürütür.
