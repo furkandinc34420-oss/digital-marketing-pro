@@ -25,6 +25,7 @@ import tarfile
 import tempfile
 import time
 import uuid
+from execution_control import checkpoint, current, TaskCancelled, StopFailed
 
 REPO = Path(__file__).resolve().parents[3]
 CUSTOMERS = ("demo-musteri", "diger-demo")
@@ -44,17 +45,32 @@ class IsolationUnavailable(RuntimeError):
     """No supported local isolation backend; never run an unisolated fallback."""
 
 
-def bounded_command(command, env, timeout, limit=MAX_COMMAND_OUTPUT):
+def bounded_command(command, env, timeout, limit=MAX_COMMAND_OUTPUT, checkpoint=None,
+                    dispatch=None, on_started=None):
     """Bound combined stdout/stderr in memory, killing the CLI group on failure."""
     deadline = time.monotonic() + timeout
     output = {"out": bytearray(), "err": bytearray()}
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+    def launch():
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+        except OSError:
+            # Native Popen reports exec/fork failure after reaping its failed
+            # child: the CLI did not execute. Keep the not_sent state.
+            raise
+        except BaseException:
+            # An interruption during spawn has an uncertain outcome.
+            if on_started is not None: on_started()
+            raise
+        if on_started is not None: on_started()
+        return process
+    process = dispatch(launch) if dispatch is not None else launch()
     try:
         with selectors.DefaultSelector() as selected:
             selected.register(process.stdout, selectors.EVENT_READ, "out")
             selected.register(process.stderr, selectors.EVENT_READ, "err")
             while selected.get_map():
+                if checkpoint is not None: checkpoint()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)
@@ -124,6 +140,7 @@ class DockerLab:
         self.containers = set()
         self.orphan_images = set()
         self.pending_creations = set()
+        self.creation_states = {"container": "not_sent", "image": "not_sent"}
         self.fixture_root = REPO / "examples/offline-seo/customers"
         self.binary = Path(sys.executable).resolve()
         self.docker = shutil.which("docker")
@@ -133,7 +150,19 @@ class DockerLab:
             raise IsolationUnavailable("Docker executable unavailable")
         # Explicit local socket: ignore remote contexts and Docker credential config.
         env = {"PATH": os.defpath, "HOME": "/nonexistent", "LANG": "C.UTF-8"}
-        result = bounded_command([self.docker, "--host", SOCKET, *args], env, timeout)
+        guarded = bool(args and args[0] in ('create', 'import', 'start'))
+        control = current() if guarded else None
+        kind = {'create':'container', 'import':'image'}.get(args[0]) if args else None
+        if kind is not None: self.creation_states[kind] = 'not_sent'
+        def started():
+            self.pending_creations.add(kind)
+            self.creation_states[kind] = 'sent_unconfirmed'
+        options = {}
+        if control is not None: options['dispatch'] = control.dispatch
+        if kind is not None: options['on_started'] = started
+        if control is not None and args[:2] == ('start', '--attach'):
+            options['checkpoint'] = control.checkpoint
+        result = bounded_command([self.docker, "--host", SOCKET, *args], env, timeout, **options)
         if result.returncode:
             raise RuntimeError("Local Docker operation failed: " + result.stderr.strip()[:800])
         return result.stdout.strip()
@@ -151,6 +180,7 @@ class DockerLab:
             try:
                 self.close()
             except RuntimeError as cleanup:
+                if current() is not None: current().failed()
                 raise RuntimeError(f"Setup failed: {original}; cleanup failed: {cleanup}") from original
             raise
         return self
@@ -242,11 +272,11 @@ class DockerLab:
                 items.update({"data/customers/" + customer + "/" + name: (raw, 0o644)
                               for name, raw in snapshots[customer].items()})
                 self._write_bundle(bundle, items)
-                self.pending_creations.add("image")
                 image = self._docker("import", "--change", "LABEL " + self.label, str(bundle))
                 if not re.fullmatch(r"sha256:[a-f0-9]{64}", image):
                     raise RuntimeError("Unexpected local image identity")
                 self.images[customer] = image
+                self.creation_states["image"] = "identified"
                 self.pending_creations.discard("image")
 
     def _worker_command(self, customer, action):
@@ -302,15 +332,19 @@ class DockerLab:
         if customer not in self.images:
             raise IsolationUnavailable("Customer environment has not been prepared")
         try:
-            self.pending_creations.add("container")
             container = self._create(customer, action)
             if not re.fullmatch(r"[a-f0-9]{64}", container):
                 raise RuntimeError("Unexpected container identity")
             self.containers.add(container)
+            self.creation_states["container"] = "identified"
             self.pending_creations.discard("container")
             config = json.loads(self._docker("inspect", container))[0]
             self._validate_config(config, customer, action)
-            output = self._docker("start", "--attach", container)
+            try:
+                output = self._docker("start", "--attach", container)
+            except TaskCancelled:
+                self._stop_cancelled(container, customer, action)
+                raise
             state = json.loads(self._docker("inspect", container))[0]["State"]
             if state["ExitCode"] != 0:
                 raise RuntimeError("Isolated worker failed: " + output[:800])
@@ -328,10 +362,38 @@ class DockerLab:
             try:
                 self._cleanup("container")
             except RuntimeError as cleanup:
+                if current() is not None: current().failed()
                 raise RuntimeError(f"Worker failed: {original}; cleanup failed: {cleanup}") from original
             raise
-        self._cleanup("container")
+        try: self._cleanup("container")
+        except BaseException:
+            if current() is not None: current().failed()
+            raise
         return result
+
+    def _stop_cancelled(self, container, customer, action):
+        control = current()
+        if control is not None: control.stopping()
+        try:
+            def state_of(config):
+                state = config['State']
+                if (not isinstance(state, dict) or type(state.get('Running')) is not bool
+                        or type(state.get('Restarting', False)) is not bool):
+                    raise StopFailed('Invalid Docker stop state')
+                return state['Running'] or state.get('Restarting', False)
+            config = json.loads(self._docker('inspect', container))[0]
+            self._validate_config(config, customer, action)
+            if state_of(config):
+                try: self._docker('stop', '--time', '2', container, timeout=5)
+                except Exception: pass  # Inspect reality, not the CLI's exit code.
+                if state_of(json.loads(self._docker('inspect', container))[0]):
+                    try: self._docker('kill', container, timeout=5)
+                    except Exception: pass
+            if state_of(json.loads(self._docker('inspect', container))[0]):
+                raise StopFailed('Container still running')
+        except Exception:
+            if control is not None: control.failed()
+            raise StopFailed('Container stop could not be verified') from None
 
     def _cleanup(self, kind):
         # Discover by the exact per-session label, even after a lost create/import reply.
@@ -401,6 +463,7 @@ class DockerLab:
         try:
             self.close()
         except RuntimeError as cleanup:
+            if current() is not None: current().failed()
             raise RuntimeError(f"Original failure: {original}; cleanup failed: {cleanup}") from original
 
 

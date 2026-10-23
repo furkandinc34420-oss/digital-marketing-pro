@@ -169,7 +169,9 @@ class TestOfflineAccess(unittest.TestCase):
             active = pool.submit(self.submit)
             self.assertTrue(entered.wait(5))
             revoked = pool.submit(self.directory.remove_membership, 'manager', A)
-            release.set(); self.assertEqual(active.result()['status'], 'succeeded'); revoked.result()
+            revoked.result(timeout=5)  # Policy mutation no longer waits for the job.
+            release.set()
+            with self.assertRaises(a.AccessDenied): active.result(timeout=5)
         with self.assertRaises(a.AccessDenied): self.service.report(self.tokens['manager'], A, 'same')
 
     def test_invalid_policy_configuration_is_rejected(self):
@@ -310,7 +312,7 @@ class TestOfflineAccess(unittest.TestCase):
                 self.assertTrue(entered.wait(5))
                 self.provider.revoke(self.tokens['manager'])
             finally: release.set()
-            self.assertEqual(running.result()['status'], 'succeeded')
+            with self.assertRaises(a.AccessDenied): running.result()
         with self.assertRaises(a.AccessDenied): self.service.status(self.tokens['manager'], A, 'same')
 
     @unittest.skipUnless(hasattr(os, 'fork'), 'fork is not supported on this platform')

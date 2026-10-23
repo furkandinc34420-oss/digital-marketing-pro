@@ -13,12 +13,15 @@ from pathlib import Path
 import re
 import sqlite3
 import stat
+import time
+from threading import Lock
 from typing import Protocol
 
 from runner import CUSTOMERS, DockerLab, MAX_COMMAND_OUTPUT
 from content_schema import validate_content_result
 from technical_schema import validate_technical_result
 import audit_report
+from execution_control import checkpoint, current, TaskCancelled, publication
 
 
 @dataclass(frozen=True)
@@ -93,10 +96,12 @@ class SeoSpecialist:
         return self.execute_snapshot(customer, DockerLab()._customer_snapshots())
 
     def execute_snapshot(self, customer, snapshots):
+        checkpoint()
         lab = DockerLab()
         # Package the exact bytes fingerprinted by the coordinator, not reopened files.
         lab._customer_snapshots = lambda: snapshots
         with lab as active:
+            checkpoint()
             return active.run(customer, self.action)
 
 
@@ -276,6 +281,8 @@ class TaskStore:
 class Coordinator:
     def __init__(self, state_root):
         self.store = TaskStore(state_root)
+        self._pid = os.getpid()
+        self._run_locks = {customer: Lock() for customer in CUSTOMERS}
         self._specialists: dict[str, Specialist] = {
             "seo.analyze": SeoSpecialist(), "seo.content": ContentSeoSpecialist(),
             "seo.technical": TechnicalSeoSpecialist()}
@@ -383,19 +390,47 @@ class Coordinator:
             return self._record(db, task_id, customer)
 
     def run(self, caller, customer, task_id, operation="seo.analyze"):
+        if os.getpid() != self._pid:
+            # Raw TrustedCaller CLI has no session; retain its legacy fork use.
+            # Inherited authenticated execution contexts must never be reused.
+            if current() is not None: raise PermissionError('Inherited execution context')
+            self._pid = os.getpid()
+            self._run_locks = {tenant: Lock() for tenant in CUSTOMERS}
+        self._check(caller, customer, task_id)
+        lock = self._run_locks[customer]
+        deadline = time.monotonic() + 180
+        while not lock.acquire(timeout=0.1):
+            checkpoint()
+            if time.monotonic() >= deadline: raise CapacityError('Customer execution is busy')
+        try:
+            checkpoint()
+            return self._run_once(caller, customer, task_id, operation)
+        finally: lock.release()
+
+    def _run_once(self, caller, customer, task_id, operation="seo.analyze"):
         self._check(caller, customer, task_id)
         if operation not in self._specialists and operation != "seo.audit":
             raise ValueError("Unsupported operation")
+        checkpoint()
         snapshots = DockerLab()._customer_snapshots()
         digest = input_digest(operation, snapshots[customer])
         with self.store.session(customer) as db:
+            checkpoint()
             existing = db.execute("SELECT operation,input_digest FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             if existing:
                 if existing[0] != operation or existing[1] != digest:
                     if existing[0] == operation == 'seo.audit':
                         self._record(db, task_id, customer)  # Classify only proven legacy records.
                     raise TaskConflict("Task ID conflicts with operation or source data")
-                return self._record(db, task_id, customer)
+                record = self._record(db, task_id, customer)
+                control = current()
+                if control is not None:
+                    with control._lock:
+                        if control.state is not None: control.state = 'already_completed'
+                        control.finished = True
+                        control._session = None
+                        control._authorize = None
+                return record
             if db.execute('SELECT count(*) FROM tasks').fetchone()[0] >= MAX_TASKS:
                 raise CapacityError("Customer task count limit reached")
             # Reserve room for a maximal result, bounded diagnostic and SQLite overhead.
@@ -405,17 +440,26 @@ class Coordinator:
             db.execute("INSERT INTO tasks(task_id,operation,caller,status,input_digest) VALUES (?,?,?,'running',?)",
                        (task_id, operation, caller.caller_id, digest))
             db.commit()  # Must persist before Docker is invoked.
+            if current() is not None: current().owns_execution = True
             try:
+                checkpoint()
                 if operation == 'seo.audit':
                     result = self._run_audit(db, customer, task_id, snapshots)
                 else:
                     specialist = self._specialists[operation]
                     result = (specialist.execute_snapshot(customer, snapshots) if isinstance(specialist, SeoSpecialist)
                               else specialist.execute(customer))
+                checkpoint()
                 self._validate_result(result, customer, operation)
                 encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
                 if len(encoded.encode("utf-8")) > MAX_COMMAND_OUTPUT:
                     raise ValueError("Result exceeds byte limit")
+            except TaskCancelled:
+                control = current()
+                status = 'failed' if control is not None and control.state == 'stop_failed' else 'interrupted'
+                db.execute("UPDATE tasks SET status=?,result=NULL,error=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=?",
+                           (status, 'Cancellation: ' + ('stop_failed' if status == 'failed' else 'stopped'), task_id))
+                db.commit()
             except Exception as exc:
                 details = json.dumps({'customer_id': customer, 'task_id': task_id,
                                       'type': type(exc).__name__, 'message': str(exc)[:2400], 'message_truncated': len(str(exc)) > 2400}, ensure_ascii=False)
@@ -426,9 +470,14 @@ class Coordinator:
                 db.commit()
             else:
                 final_status = result['result']['execution_state'] if operation == 'seo.audit' else 'succeeded'
-                db.execute("UPDATE tasks SET status=?,result=?,error=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=?",
-                           (final_status, encoded, "Birleşik denetim eksik; uzman durumlarını inceleyin." if final_status == "failed" else None, task_id))
-                db.commit()
+                try:
+                    with publication():
+                        db.execute("UPDATE tasks SET status=?,result=?,error=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=?",
+                                   (final_status, encoded, "Birleşik denetim eksik; uzman durumlarını inceleyin." if final_status == "failed" else None, task_id))
+                        db.commit()
+                except TaskCancelled:
+                    db.execute("UPDATE tasks SET status='interrupted',result=NULL,error='Cancellation: stopped',updated_at=CURRENT_TIMESTAMP WHERE task_id=?", (task_id,))
+                    db.commit()
             return self._record(db, task_id, customer)
 
 
@@ -444,7 +493,8 @@ class Coordinator:
         outcomes = {op: {'status': 'pending', 'result': None, 'error': None} for op in audit_report.OPERATIONS}
         diagnostics = []
 
-        def checkpoint():
+        def persist_checkpoint():
+            checkpoint()
             report = audit_report.compose(customer, hashes, catalog, outcomes, 'running')
             # Leave space for failure/interruption labels and bounded diagnostics.
             audit_report.bounded(report, audit_report.MAX_AUDIT_BYTES - 65536)
@@ -452,25 +502,30 @@ class Coordinator:
                        (json.dumps({'result': report}, ensure_ascii=False), task_id))
             db.commit()
 
-        checkpoint()
+        persist_checkpoint()
         for op in audit_report.OPERATIONS:
+            checkpoint()
             try:
-                outcomes[op] = {'status': 'running', 'result': None, 'error': None}
                 checkpoint()
+                outcomes[op] = {'status': 'running', 'result': None, 'error': None}
+                persist_checkpoint()
                 specialist = self._specialists[op]
                 response = specialist.execute_snapshot(customer, snapshots)
+                checkpoint()
                 self._validate_result(response, customer, op)
                 report = response['result']
                 audit_report.validate_expert(op, report, customer, hashes, catalog)
                 outcomes[op] = {'status': 'succeeded', 'result': report, 'error': None}
-                checkpoint()  # Only retain a result if the whole aggregate fits.
+                persist_checkpoint()  # Only retain a result if the whole aggregate fits.
+            except TaskCancelled:
+                raise
             except Exception as exc:
                 outcomes[op] = {'status': 'failed', 'result': None,
                                 'error': 'Analiz tamamlanamadı; yönetici incelemesi gerekiyor.'}
                 diagnostics.append({'operation': op, 'type': type(exc).__name__, 'message': str(exc)[:1000]})
                 db.execute('INSERT OR REPLACE INTO admin_errors VALUES (?,?)',
                            (task_id, json.dumps({'expert_errors': diagnostics}, ensure_ascii=False)))
-                checkpoint()
+                persist_checkpoint()
         state = 'succeeded' if all(x['status'] == 'succeeded' for x in outcomes.values()) else 'failed'
         return {'result': audit_report.compose(customer, hashes, catalog, outcomes, state)}
 

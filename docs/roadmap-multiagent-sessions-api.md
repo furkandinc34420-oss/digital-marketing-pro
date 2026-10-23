@@ -73,3 +73,15 @@ Persistent memory across agent invocations within a managed session. Today DMP u
 ---
 
 **This is a planning document.** No code in DMP implements anything in this doc — the managed-agents path remains unadopted and engagement state still persists to local JSON files. It exists so the team knows the direction and can evaluate whether to start Phase A in a future release.
+
+## AI Marketing Office — çevrimdışı güvenlik takip işleri
+
+Aşağıdakiler planlanmıştır; bu aşamada uygulanmamıştır. Bu bağımsız çevrimdışı
+çalışma Anthropic API/Claude aboneliği veya başka ücretli sağlayıcı gerektirmez.
+
+- Host SIGKILL sonrasında kalan Docker işçilerini bulan dış supervisor.
+- Kalıcı müşteri/görev/yürütme–Docker kaynak eşleştirmesi ve sahiplik doğrulaması.
+- Artık kaynak uzlaştırması/temizliği, güvenli yeniden başlatma ve operatör uyarıları.
+- Gerçek site/reklam işlemlerinden önce tek kullanımlık, kesin değişikliğe bağlı
+  insan onayı; güncel müşteri yetkisi ve iptal kontrolü; atomik bütçe rezervasyonu
+  ve servis idempotency mekanizması. Gönderilmiş işlemin geri alınması garanti değildir.

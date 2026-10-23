@@ -138,3 +138,20 @@ taslaklar saklanmaz ve analizler yeniden çalıştırılmaz.
 yapar, saf rapor hesaplamasında ortak politika kilidini bırakır ve sonuç dönmeden
 önce oturum/hesap/üyeliği yeniden doğrular. Arada üyelik kaldırılmışsa veya hesap
 kapatılmışsa sonuç verilmez. Diğer mevcut işlemlerin kilit davranışı değişmez.
+
+## Süreli çevrimdışı oturumlar
+
+[Oturum güvenliği ve gelecekteki OIDC doğrulama sınırı](SESSION_SECURITY.md).
+Oturumlar varsayılan 15 dakika mutlak süreyle sınırlıdır; tekil/toplu iptal,
+hesap/kimlik nesli ve mevcut kalıcı depo sağlığı her doğrulamada kontrol edilir.
+Görev bitişinde süre dolmuş veya iptal edilmiş oturuma cevap verilmez; başlamış
+analiz otomatik iptal edilmez. Bu, önceki yalnızca istek başlangıcı kontrolünü
+sıkılaştırır. Yetki ve CLI sınırları korunur; gerçek OIDC eklenmez.
+
+## Görev iptali ve kısa politika kilidi
+
+[İptal durumları, Docker sonlandırma ve SQLite kontrol kapsamı](CANCELLATION.md).
+Görev yürütülürken ortak politika kilidi artık tutulmaz. Oturum/politika iptali
+çalışan kontrole bildirilir; gerçek durma ayrıca doğrulanır. Yukarıdaki eski seri
+istek açıklaması bu yürütme yolu için artık geçerli değildir. Yerel CLI oturum
+iptaline bağlanmamıştır; gerçek yan etki izni yoktur.

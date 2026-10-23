@@ -139,6 +139,8 @@ class PersistentAccessDirectory(AccessDirectory):
         if self._closed or self._poisoned:
             raise AccessDenied()
         if self._ready:
+            if getattr(self._health_scope, 'depth', 0):
+                return  # Same thread still owns the checked policy lock.
             with self._lock:
                 try:
                     self._verify_ownership()

@@ -306,6 +306,42 @@ class TestEvidenceRecommendations(unittest.TestCase):
             with self.assertRaises(access.ServiceUnavailable):self.service.recommendations(self.tokens[A],A,'report')
         self.assertEqual(before,snapshot())
 
+    def test_expiry_during_recommendation_derivation_blocks_response(self):
+        self.run_report()
+        clock=mock.Mock(return_value=100.0)
+        provider=access.OfflineIdentityProvider(self.directory,lifetime_seconds=10,clock=clock)
+        service=access.AccessService(provider,self.directory,self.app)
+        token=provider.issue(A)
+        original=rec.from_record
+        def derive(*args):
+            result=original(*args)
+            clock.return_value=110.0
+            return result
+        with mock.patch.object(rec,'from_record',side_effect=derive):
+            with self.assertRaises(access.AccessDenied):service.recommendations(token,A,'report')
+
+    def test_policy_changes_during_derivation_recheck_exact_read_permission(self):
+        self.run_report()
+        original=rec.from_record
+        for change in ('close','rebind','reader'):
+            with self.subTest(change=change):
+                def derive(*args):
+                    result=original(*args)
+                    if change=='close':self.directory.set_user(access.User(A,access.Identity('offline-fixture',A),active=False))
+                    elif change=='rebind':self.directory.set_user(access.User(A,access.Identity('offline-fixture','changed-subject')))
+                    else:self.directory.set_membership(access.Membership(A,A,access.Role.READER))
+                    return result
+                try:
+                    with mock.patch.object(rec,'from_record',side_effect=derive):
+                        if change=='reader':
+                            self.assertEqual(self.service.recommendations(self.tokens[A],A,'report')['customer_id'],A)
+                        else:
+                            with self.assertRaises(access.AccessDenied):self.service.recommendations(self.tokens[A],A,'report')
+                finally:
+                    self.directory.set_user(access.User(A,access.Identity('offline-fixture',A)))
+                    self.directory.set_membership(access.Membership(A,A,access.Role.TENANT_ADMIN))
+                    self.tokens[A]=self.provider.issue(A)
+
     def test_two_customer_real_docker_audit_to_authorized_drafts(self):
         from runner import IsolationUnavailable
         try:DockerLab()._docker('version','--format','{{.Server.Version}}')
