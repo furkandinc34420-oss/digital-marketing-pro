@@ -76,6 +76,9 @@ Persistent memory across agent invocations within a managed session. Today DMP u
 
 ## AI Marketing Office — çevrimdışı güvenlik takip işleri
 
+Bu bağımsız çalışmanın aşamaları, durumları ve kabul kriterleri ayrı
+[AI Marketing Office yol haritasında](AI_MARKETING_OFFICE_ROADMAP.md) izlenir.
+
 Aşağıdakiler planlanmıştır; bu aşamada uygulanmamıştır. Bu bağımsız çevrimdışı
 çalışma Anthropic API/Claude aboneliği veya başka ücretli sağlayıcı gerektirmez.
 
