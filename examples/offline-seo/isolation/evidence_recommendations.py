@@ -230,7 +230,8 @@ def from_record(record, customer, sources):
     or a future trusted archive containing the original snapshot.
     """
     from coordinator import input_digest
-    from offline_seo import MAX_FILE_BYTES
+    from runner import seo
+    MAX_FILE_BYTES = seo.MAX_FILE_BYTES
     if set(sources) != {'profile.json','pages.json'} or any(type(raw) is not bytes or len(raw) > MAX_FILE_BYTES for raw in sources.values()):
         raise ValueError('Invalid recommendation source snapshot')
     if record.get('operation') not in (*audit.OPERATIONS,'seo.audit') or record.get('status') not in {'succeeded','failed','interrupted'}:

@@ -14,6 +14,7 @@ import re
 import sqlite3
 import stat
 import time
+import uuid
 from threading import Lock
 from typing import Protocol
 
@@ -21,6 +22,7 @@ from runner import CUSTOMERS, DockerLab, MAX_COMMAND_OUTPUT
 from content_schema import validate_content_result
 from technical_schema import validate_technical_result
 import audit_report
+from resource_store import resource_scope
 from execution_control import checkpoint, current, TaskCancelled, publication
 
 
@@ -168,6 +170,9 @@ class TaskStore:
                                        dir_fd=directories[-1]))
             directory = directories[-1]
             _private(os.fstat(directory))
+            try: os.stat('resources.sqlite3', dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError: pass
+            else: raise PermissionError('Resource store cannot be adopted as task state')
             files.append(_file(directory, "tasks.lock"))
             # Nonblocking, process-wide tenant lock; never recover a live task.
             fcntl.flock(files[-1], fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -443,12 +448,14 @@ class Coordinator:
             if current() is not None: current().owns_execution = True
             try:
                 checkpoint()
-                if operation == 'seo.audit':
-                    result = self._run_audit(db, customer, task_id, snapshots)
-                else:
-                    specialist = self._specialists[operation]
-                    result = (specialist.execute_snapshot(customer, snapshots) if isinstance(specialist, SeoSpecialist)
-                              else specialist.execute(customer))
+                execution = current().execution_id if current() is not None else uuid.uuid4().hex
+                with resource_scope(self.store.root / 'docker-resources', customer, task_id, execution):
+                    if operation == 'seo.audit':
+                        result = self._run_audit(db, customer, task_id, snapshots)
+                    else:
+                        specialist = self._specialists[operation]
+                        result = (specialist.execute_snapshot(customer, snapshots) if isinstance(specialist, SeoSpecialist)
+                                  else specialist.execute(customer))
                 checkpoint()
                 self._validate_result(result, customer, operation)
                 encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)

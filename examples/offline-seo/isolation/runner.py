@@ -26,6 +26,7 @@ import tempfile
 import time
 import uuid
 from execution_control import checkpoint, current, TaskCancelled, StopFailed
+from resource_store import ResourceStore, current_scope, default_root, OwnershipError
 
 REPO = Path(__file__).resolve().parents[3]
 CUSTOMERS = ("demo-musteri", "diger-demo")
@@ -46,11 +47,12 @@ class IsolationUnavailable(RuntimeError):
 
 
 def bounded_command(command, env, timeout, limit=MAX_COMMAND_OUTPUT, checkpoint=None,
-                    dispatch=None, on_started=None):
+                    dispatch=None, on_started=None, before_spawn=None):
     """Bound combined stdout/stderr in memory, killing the CLI group on failure."""
     deadline = time.monotonic() + timeout
     output = {"out": bytearray(), "err": bytearray()}
     def launch():
+        if before_spawn is not None: before_spawn()
         try:
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        stdin=subprocess.DEVNULL, env=env, start_new_session=True)
@@ -134,7 +136,15 @@ def snapshot_runtime(path):
 
 
 class DockerLab:
-    def __init__(self):
+    def __init__(self, ownership_root=None):
+        self.scope = current_scope()
+        self.ownership_root = (self.scope.root if self.scope else
+                               Path(ownership_root) if ownership_root is not None else default_root())
+        self.resource_store = ResourceStore(self.ownership_root)
+        self.resource_task = self.scope.task if self.scope else "local-demo"
+        self.resource_execution = self.scope.execution if self.scope else uuid.uuid4().hex
+        self._resource_customer = self.scope.customer if self.scope else CUSTOMERS[0]
+        self._bindings = {}
         self.label = "dmp-offline-isolation=" + uuid.uuid4().hex
         self.images = {}
         self.containers = set()
@@ -148,24 +158,89 @@ class DockerLab:
     def _docker(self, *args, timeout=45):
         if not self.docker:
             raise IsolationUnavailable("Docker executable unavailable")
+        if not args or not (args[0] in {'version','inspect','ps','create','import','start','stop','kill','rm'}
+                            or args[:2] in {('image','ls'),('image','rm')}):
+            raise OwnershipError('Unsupported Docker operation')
         # Explicit local socket: ignore remote contexts and Docker credential config.
         env = {"PATH": os.defpath, "HOME": "/nonexistent", "LANG": "C.UTF-8"}
         guarded = bool(args and args[0] in ('create', 'import', 'start'))
         control = current() if guarded else None
         kind = {'create':'container', 'import':'image'}.get(args[0]) if args else None
-        if kind is not None: self.creation_states[kind] = 'not_sent'
+        if args and args[0] == 'create':
+            if tuple(args) != getattr(self, '_active_create', None):
+                raise OwnershipError('Create requires a verified image and fixed request')
+            self._verified_image(self._resource_customer)
+        if args and args[0] == 'import':
+            if len(args) == 2:
+                args = ('import','--change','LABEL ' + self.label,args[1])
+            elif len(args) != 4 or args[1:3] != ('--change','LABEL ' + self.label):
+                raise OwnershipError('Unexpected import request')
+        mutation_kind = None
+        if args and args[0] in ('start','stop','kill','rm'):
+            expected = {'start':('start','--attach',args[-1]),
+                        'stop':('stop','--time','2',args[-1]),
+                        'kill':('kill',args[-1]),'rm':('rm','--force',args[-1])}
+            if args != expected[args[0]]: raise OwnershipError('Unexpected resource command')
+            mutation_kind = 'container'
+        elif args[:2] == ('image','rm'):
+            if len(args) != 3: raise OwnershipError('Unexpected image removal')
+            mutation_kind = 'image'
+        if mutation_kind:
+            resource = args[-1]
+            config = json.loads(self._docker('inspect',resource))[0]
+            owned = self._verify_resource(mutation_kind,resource,config)
+            if args[0] == 'start':
+                customer = owned['customer']
+                actions = [a for a in ('analyze','content','technical','probe')
+                           if config.get('Config',{}).get('Cmd') == self._worker_command(customer,a)]
+                if not actions: raise OwnershipError('Unknown worker command')
+                self._validate_config(config,customer,actions[0])
+        binding = None
+        if kind is not None:
+            if self.scope is not None and self._resource_customer != self.scope.customer:
+                raise OwnershipError('Resource scope customer mismatch')
+            self.creation_states[kind] = 'not_sent'
+            binding = self.resource_store.intent(self._resource_customer, self.resource_task,
+                                                 self.resource_execution, kind)
+            self._bindings[binding['attempt']] = binding
+            added = []
+            for key, value in self.resource_store.labels(binding).items():
+                added += (['--label', key + '=' + value] if kind == 'container' else
+                          ['--change', 'LABEL ' + key + '=' + value])
+            args = (args[0], *added, *args[1:])
+        def sending():
+            # Write ahead of fork/exec. A crash in this gap is deliberately
+            # sent_unconfirmed: SQLite and Docker cannot form one transaction.
+            self.resource_store.transition(binding, 'not_sent', 'sent_unconfirmed')
+            self.pending_creations.add(kind)
+
         def started():
             self.pending_creations.add(kind)
             self.creation_states[kind] = 'sent_unconfirmed'
         options = {}
         if control is not None: options['dispatch'] = control.dispatch
-        if kind is not None: options['on_started'] = started
+        if kind is not None:
+            options['on_started'] = started
+            options['before_spawn'] = sending
         if control is not None and args[:2] == ('start', '--attach'):
             options['checkpoint'] = control.checkpoint
-        result = bounded_command([self.docker, "--host", SOCKET, *args], env, timeout, **options)
+        try:
+            result = bounded_command([self.docker, "--host", SOCKET, *args], env, timeout, **options)
+        except OSError:
+            if binding is not None and self.creation_states[kind] == 'not_sent':
+                self.resource_store.transition(binding, 'sent_unconfirmed', 'not_sent')
+                self.pending_creations.discard(kind)
+            raise
         if result.returncode:
             raise RuntimeError("Local Docker operation failed: " + result.stderr.strip()[:800])
-        return result.stdout.strip()
+        output = result.stdout.strip()
+        if binding is not None:
+            pattern = r"sha256:[a-f0-9]{64}" if kind == 'image' else r"[a-f0-9]{64}"
+            if not re.fullmatch(pattern, output):
+                raise OwnershipError('Invalid Docker resource identity')
+            config = json.loads(self._docker('inspect', output))[0]
+            self._verify_resource(kind, output, config)
+        return output
 
     def __enter__(self):
         if platform.system() != "Linux":
@@ -266,7 +341,8 @@ class DockerLab:
             common["app/" + name] = (seo.read_bounded_file(
                 REPO, ("examples", "offline-seo", "isolation", name), MAX_RUNTIME_FILE), 0o644)
         with tempfile.TemporaryDirectory(prefix="dmp-isolation-") as tmp:
-            for customer in CUSTOMERS:
+            for customer in ((self.scope.customer,) if self.scope else CUSTOMERS):
+                self._resource_customer = customer
                 bundle = Path(tmp) / (customer + ".tar")
                 items = dict(common)
                 items.update({"data/customers/" + customer + "/" + name: (raw, 0o644)
@@ -283,8 +359,23 @@ class DockerLab:
         return [str(self.binary), "-I", "-S", "-B", "/app/worker.py",
                 "--customer", customer, "--action", action, "--host-fixtures", str(self.fixture_root)]
 
+    def _verified_image(self, customer):
+        image = self.images.get(customer)
+        if not isinstance(image,str) or not re.fullmatch(r'sha256:[a-f0-9]{64}',image):
+            raise OwnershipError('No verified customer image')
+        config = json.loads(self._docker('inspect', image))[0]
+        owned = self._verify_resource('image', image, config)
+        if owned['customer'] != customer:
+            raise OwnershipError('Container image customer mismatch')
+        return owned
+
     def _create(self, customer, action):
-        return self._docker(
+        if self.scope is not None and customer != self.scope.customer:
+            raise OwnershipError('Resource scope customer mismatch')
+        self._resource_customer = customer
+        checkpoint()
+        self._verified_image(customer)
+        request = (
             "create", "--pull=never", "--label", self.label,
             "--network=none", "--read-only", "--user=65534:65534", "--cap-drop=ALL",
             "--security-opt=no-new-privileges:true", "--pids-limit=32", "--memory=256m",
@@ -294,6 +385,9 @@ class DockerLab:
             "--tmpfs", "/tmp:" + TMPFS,
             "--env=LANG=C.UTF-8", "--env=HOME=/tmp", "--env=PYTHONDONTWRITEBYTECODE=1",
             self.images[customer], *self._worker_command(customer, action))
+        self._active_create = request
+        try: return self._docker(*request)
+        finally: del self._active_create
 
     def _validate_config(self, config, customer, action):
         try:
@@ -383,6 +477,7 @@ class DockerLab:
                 return state['Running'] or state.get('Restarting', False)
             config = json.loads(self._docker('inspect', container))[0]
             self._validate_config(config, customer, action)
+            self._verify_resource('container', container, config)
             if state_of(config):
                 try: self._docker('stop', '--time', '2', container, timeout=5)
                 except Exception: pass  # Inspect reality, not the CLI's exit code.
@@ -395,7 +490,20 @@ class DockerLab:
             if control is not None: control.failed()
             raise StopFailed('Container stop could not be verified') from None
 
+    def _verify_resource(self, kind, resource, config):
+        labels = config.get('Config', {}).get('Labels', {})
+        binding = self._bindings.get(labels.get('dmp-owner-attempt'))
+        key, value = self.label.split('=',1)
+        if (binding is None or binding['kind'] != kind
+                or binding['task'] != self.resource_task or binding['execution'] != self.resource_execution
+                or self.scope is not None and binding['customer'] != self.scope.customer
+                or labels.get(key) != value):
+            raise OwnershipError('Unrecognized Docker resource; operator review required')
+        return self.resource_store.verify(binding, resource, config)
+
     def _cleanup(self, kind):
+        if self.resource_store.poisoned:
+            raise OwnershipError('Resource store unhealthy; cleanup requires operator review')
         # Discover by the exact per-session label, even after a lost create/import reply.
         for attempt in range(2):
             errors = []
@@ -421,6 +529,7 @@ class DockerLab:
                     key, value = self.label.split("=", 1)
                     if config["Config"]["Labels"].get(key) != value:
                         raise RuntimeError("Resource ownership mismatch; removal refused")
+                    owned = self._verify_resource(kind, resource, config)
                     if kind == "container":
                         self._docker("rm", "--force", resource)
                         self.containers.discard(resource)
@@ -428,8 +537,11 @@ class DockerLab:
                         self._docker("image", "rm", resource)
                         self.orphan_images.discard(resource)
                         self.images = {k: v for k, v in self.images.items() if v != resource}
+                    self.resource_store.transition(owned, 'identified', 'removed', resource)
                 except (RuntimeError, OSError, subprocess.TimeoutExpired, ValueError, KeyError,
                         TypeError, IndexError, AttributeError) as exc:
+                    if isinstance(exc, OwnershipError):
+                        raise  # Never hide an ambiguous SQLite commit behind Docker retry.
                     if (discovered is not None and resource not in discovered
                             and isinstance(exc, RuntimeError)
                             and any(s in str(exc) for s in ("No such object", "No such container", "No such image"))):
@@ -469,9 +581,10 @@ class DockerLab:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument('--ownership-root', type=Path, help='Trusted persistent host state root (default: private /tmp demo state)')
+    args = parser.parse_args()
     try:
-        with DockerLab() as lab:
+        with DockerLab(ownership_root=args.ownership_root) as lab:
             result = {customer: {action: lab.run(customer, action)
                                  for action in ("analyze", "probe")} for customer in CUSTOMERS}
         print(json.dumps(result, ensure_ascii=False, indent=2))

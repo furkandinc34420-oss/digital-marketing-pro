@@ -29,10 +29,15 @@ kanıtı değildir. Her güvenlik değişiminde ilgili regresyonlar, tam paket v
 Docker varsa iki müşterili entegrasyon yeniden değerlendirilir. Atlanan testler
 gerekçesiyle kaydedilir; başarı sayılmaz.
 
-**Son kayıtlı doğrulama:** Tam paket 995 toplam / 986 başarılı / 9 atlanan /
+**Önceki tabanın doğrulaması:** Tam paket 995 toplam / 986 başarılı / 9 atlanan /
 0 başarısız; son kayıt öncesi ilgili 176 test tekrar çalıştırılmış ve tamamı
-geçmiştir (iki müşterili gerçek Docker dahil). Bu belge görevi sırasında test
-paketi yeniden çalıştırılmadı; yalnızca belge ve bağlantı kontrolleri yapıldı.
+geçmiştir (iki müşterili gerçek Docker dahil). Bu, b246e31 tabanının geçmiş
+kaydıdır. 5.4 uygulamasında tam paket yeniden çalıştırıldı: **1021 toplam,
+1012 başarılı, 9 atlanan, 0 başarısız**. İlgili grup **202 başarılı, 0 atlanan,
+0 başarısız**; kaynak sahipliği dosyasında 26 test vardır. Bu dosya temiz süreçte
+tek başına da 26 başarılı / 0 atlanan / 0 başarısız sonuç vermiştir. Gerçek Docker
+kesinti testleri ve iki müşterili dört SEO işlemi/öneri akışı dahildir.
+Bu geliştirme henüz commit edilmemiştir; bağımsız inceleme beklemektedir.
 
 **Kapsam sınırı:** Yalnızca iki kurgusal müşteri kullanılır. Gerçek müşteri,
 trafik, sıralama, dönüşüm veya pazarlama başarısı doğrulanmış değildir.
@@ -43,7 +48,7 @@ birleştiren `seo.audit` vardır. Koordinatör deterministik Python kodudur;
 
 ## Önce: Aşama 5'in kalan işleri hangi sırayla yapılmalı?
 
-1. **5.4 — Kalıcı görev–kaynak bağı:** İşçinin hangi müşteri/görev/yürütmeye ait
+1. **5.4 — Kalıcı görev–kaynak bağı (prototipi doğrulandı):** İşçinin hangi müşteri/görev/yürütmeye ait
    olduğunun, gönderim öncesinden itibaren güvenilir kaydı olmadan supervisor
    güvenli biçimde kaynak seçemez.
 2. **5.5 — Bağımsız supervisor:** Ana süreç SIGKILL ile öldüğünde de çalışmalı;
@@ -63,8 +68,8 @@ birleştiren `seo.audit` vardır. Koordinatör deterministik Python kodudur;
 
 **OIDC ile SIGKILL güvenliği farklı sorunları çözer.** OIDC kimin giriş yaptığını
 doğrular; ana süreç öldüğünde Docker işçisini durdurmaz. Supervisor ise kullanıcı
-kimliğini doğrulamaz. Mevcut çevrimdışı prototipte ilk somut öncelik 5.4, ardından
-5.5'tir; bunlar gerçek sağlayıcı veya maliyet gerektirmeden sınanabilir. Gerçek
+kimliğini doğrulamaz. Mevcut çevrimdışı prototipte 5.4'ün kabul testleri geçmiştir; bağımsız
+inceleme sonrasında sıradaki somut iş 5.5'tir; bunlar gerçek sağlayıcı veya maliyet gerektirmeden sınanabilir. Gerçek
 müşteriye dış erişim için OIDC/MFA kapıları da gereklidir. OIDC eklenmesi tek başına
 yayına çıkış gerekçesi değildir; çok süreçli dağıtım için ayrıca 5.11 şarttır.
 
@@ -89,7 +94,7 @@ yayına çıkış gerekçesi değildir; çok süreçli dağıtım için ayrıca 
 | 5.1 Kalıcı kimlik ve müşteri yetki deposu | prototip / P0 / 5 | Güvenilir özel dizin, tek sahip süreç | Değişmez hesap ID, kimlik nesli ve açık üyelik korunur; admin üyelik olmadan müşteri verisi alamaz; bozuk indeks/kayıt reddedilir; kilit kaybı veya eski revizyonla yetki geri yazılamaz; SQL hatası güvenli kapatır. | [Depo](../examples/offline-seo/isolation/identity_store.py), [belge](../examples/offline-seo/isolation/IDENTITY_STORE.md), [test](../tests/test_offline_identity_store.py) |
 | 5.2 Süreli oturum ve her istekte yetkilendirme | prototip / P0 / 5 | 5.1, güvenilir yerel fixture sağlayıcısı | Süre sonu/iptal/hesap kapanması/kimlik yeniden atama erişimi reddeder; okuma dosya değiştirmez; sonuç öncesi yetki yeniden kontrol edilir; restart/fork eski tokenı geçerli kılmaz; 1000 oturum sınırı ve saat hataları sınanır. | [Erişim](../examples/offline-seo/isolation/access_control.py), [oturum belgesi](../examples/offline-seo/isolation/SESSION_SECURITY.md), [erişim testi](../tests/test_offline_access.py), [oturum testi](../tests/test_offline_sessions.py) |
 | 5.3 Süreç içi iptal ve SQLite kontrol maliyeti | prototip / P0 / 5 | 5.1–5.2, 2.1 | İptal ile Popen kısa kilitte sıralanır; gönderilmemiş create/import sahte stop_failed üretmez; gönderilmiş belirsiz sonuç unutulmaz; gerçek durma doğrulanır; müşteriler etkilenmez. Aynı kilitli kapsamda kontrol tekrarı azalırken sonraki istekte güncel yetki/depo kontrol edilir. | [Kontrol](../examples/offline-seo/isolation/execution_control.py), [iptal belgesi](../examples/offline-seo/isolation/CANCELLATION.md), [iptal testi](../tests/test_offline_cancellation.py), [başlatma testi](../tests/test_offline_dispatch.py) |
-| 5.4 Kalıcı görev–Docker kaynak sahipliği | planlandı / P0 / 5, ilk iş | 3.1, 5.3; mevcut özeti ve kilitleri koruyan kayıt tasarımı | Müşteri, görev, benzersiz yürütme ve kaynak kimliği güvenilir kayıtta bağlanır; niyet gönderimden önce kalıcıdır; not_sent/sent_unconfirmed/identified ayrımı restart sonrası korunur; eksik/çelişkili sahiplikte başka kaynak durdurulmaz; create/import öncesi/sonrası öldürme testleri geçer. Docker ile SQLite arasında atomiklik varsayılmaz. | Başlangıç: [runner](../examples/offline-seo/isolation/runner.py), [koordinatör](../examples/offline-seo/isolation/coordinator.py), [yaşam döngüsü testleri](../tests/test_offline_dispatch.py) |
+| 5.4 Kalıcı görev–Docker kaynak sahipliği | prototip / P0 / 5 | 3.1, 5.3; mevcut özeti ve kilitleri koruyan kayıt tasarımı | Müşteri, görev, benzersiz yürütme ve kaynak kimliği güvenilir kayıtta bağlanır; niyet gönderimden önce kalıcıdır; not_sent/sent_unconfirmed/identified ayrımı restart sonrası korunur; eksik/çelişkili sahiplikte başka kaynak durdurulmaz; create/import öncesi/sonrası öldürme testleri geçer. Docker ile SQLite arasında atomiklik varsayılmaz. | Başlangıç: [runner](../examples/offline-seo/isolation/runner.py), [koordinatör](../examples/offline-seo/isolation/coordinator.py), [yaşam döngüsü testleri](../tests/test_offline_dispatch.py), [kalıcı depo ve Docker testleri](../tests/test_offline_resource_store.py), [kabul kanıtı ve sınırlar](../examples/offline-seo/isolation/RESOURCE_OWNERSHIP.md) |
 | 5.5 SIGKILL sonrası dış supervisor | planlandı / P0 / 5 | 5.4, 2.2; ana süreçten bağımsız yaşam döngüsü | Gerçek ana süreç SIGKILL testinde işçi bulunur; kayıt ve Docker sahipliği eşleşir; başka müşterinin/asıl görevin işçisi etkilenmez; kontrollü/zorunlu durma inspect ile doğrulanır; doğrulanamayan durum hata olur. Yeniden PID kullanımına güvenilmez; süre hedefi testte ölçülür. | Açık sınır: [iptal belgesi](../examples/offline-seo/isolation/CANCELLATION.md) |
 | 5.6 Artık kaynak uzlaştırma ve operatör uyarıları | planlandı / P0 / 5 | 5.4–5.5, 5.7 kayıt sözleşmesi | Daemon kesintisi, lost reply ve stop/cleanup hatası kalıcı görünür; tekrar uzlaştırma idempotent olur; yalnızca doğrulanmış kaynaklar temizlenir, genel prune yoktur; çözülemeyen kaynaklar güvenilir operatöre bildirilir; görev yanlış başarılı gösterilmez. | Başlangıç: [mevcut temizleme](../examples/offline-seo/isolation/runner.py), [hata testleri](../tests/test_offline_dispatch.py) |
 | 5.7 Kalıcı güvenlik ve yönetici denetim kayıtları | planlandı / P0 / 5 | 5.1, olay/veri saklama politikası | Kimlik/üyelik değişimi, erişim reddi, iptal ve kaynak hataları işlem kimliğiyle izlenir; sır/token/ham rapor yazılmaz; müşteri ayrımı, erişim izinleri, saklama/boyut sınırı ve silme politikası test edilir; kayıt arızasında kritik işlemin davranışı tanımlıdır. Mevcut bellek kuyruğu kalıcı kayıt sayılmaz. | Başlangıç: [erişim olayları](../examples/offline-seo/isolation/access_control.py), [yönetici hata kayıtları](../examples/offline-seo/isolation/coordinator.py) |
@@ -145,7 +150,7 @@ Bu numaralama ileriye dönük ürün planıdır; öneri katmanının ilk prototi
 | 9.3 Kurumsal kapasite ve operasyon | planlandı / P2 / 9 | 5.11–5.12, yük ve kurtarma hedefleri | Kuyruk adaleti, müşteri başına kapasite, sınırlar, bölgesel veri politikası, olay müdahalesi ve geri yükleme yük altında sınanır; bir müşterinin aşırı işi diğerinin verisini/kapasitesini kontrolsüz etkilemez. Test kapsamı olmayan 24 uzman paralel açılmaz. | Mevcut sınırlar: [koordinatör](../examples/offline-seo/isolation/coordinator.py), [Docker](../examples/offline-seo/isolation/runner.py) |
 | 9.4 Ajan/model maliyet yönetimi | planlandı / P1 / 9; ücretli modelden önce | İşlem maliyet defteri, 7.3 benzeri rezervasyon tasarımı | Model/token/araç/kaynak kullanımının müşteri ve görev maliyeti hesaplanır; tahmin ile gerçek ücret ayrılır; görev/gün/ay üst sınırları ve eşzamanlı rezervasyon sınanır; limitte durur; tekrarlı işe kör ücretli çağrı yapılmaz. Ücretsiz kota veya Claude aboneliği varsayılmaz. | Mevcut deterministik başlangıç: [koordinatör](../examples/offline-seo/isolation/coordinator.py); ücretli model yürütme yok |
 
-## İlk somut geliştirme görevi: 5.4'ün küçük çevrimdışı sürümü
+## 5.4'ün küçük çevrimdışı sürümü — kabul kriterleri
 
 **Amaç:** Mevcut koordinatör/runner'ı yeniden yazmadan, yalnızca güvenilir hostun
 erişebildiği kalıcı yürütme–kaynak kaydı için küçük bir şema ve yaşam döngüsü eklemek.
@@ -174,3 +179,38 @@ Kabul testleri:
 
 Bu kabul kanıtlarından sonra 5.5'e geçilir. Üretime çıkış ve gerçek sağlayıcı
 bağlantısı ayrıca yetkilendirilmiş iş olarak ele alınır.
+
+
+### 5.4 kabul kaydı ve sıradaki iş
+
+Yukarıdaki beş kriter çevrimdışı kapsamda test edildi: iki müşterinin aynı görev
+ID'si, kalıcı niyet/durum ayrımı, gerçek import/create sırasında sekiz SIGKILL
+noktası, SQL yazma/kayıp commit cevabı, sahte/çelişkili sahiplik ve yabancı imaj
+reddi, yeniden başlatmada idempotency, mevcut erişim/SEO regresyonları. Test
+sonunda bu çalışmanın etiketli Docker konteyneri veya imajı kalmadığı doğrulandı.
+5.4 bu nedenle **prototip** olarak işaretlendi; üretime hazır veya 5.5 tamamlandı
+sayılmaz. Ayrıntılı eşleştirme [teknik kabul belgesindedir](../examples/offline-seo/isolation/RESOURCE_OWNERSHIP.md).
+
+**Bir sonraki önerilen görev 5.5:** Ana süreçten bağımsız supervisor'ı önce
+kurgusal iki müşteriyle, 5.4 kayıtları ile gerçek Docker kanıtını birlikte kullanarak
+sınamak. Otomatik silme/durdurma bugün yoktur. 5.4'teki belirsiz gönderim kaydı tek
+başına kaynak yokluğu veya silme yetkisi sayılmamalıdır. Supervisor için özel kalıcı
+durum dizini seçilmelidir; doğrudan demo CLI'ın varsayılan /tmp alanı yedek veya
+kalıcı işletim garantisi değildir. 5.6 uzlaştırma/uyarı, 5.8 yedekleme ve 5.11 çok
+süreçli yetki iptali ayrı açık işler olarak kalır.
+
+
+### 5.4 bağımsız inceleme düzeltmeleri
+
+İki orta ve bir düşük bulgu için yedi yeni regresyon eklendi. Native Docker
+sahiplik kontrolü artık üretim bayrağıyla kapatılamaz; desteklenmeyen komut
+alternatifleri reddedilir. Kaynak deposu ayrı `resources.sqlite3`/`resources.lock`
+ve açık tür işareti kullanır; görev deposunu şema/kurtarma çalıştırarak benimsemez.
+Yanlış kökte, başka müşterinin görev dosyası bulunsa da mevcut dosyaların baytları
+korunur. Görev DB'sinin kaynak dosya adına kopyalanması da yazmadan reddedilir.
+Öneri katmanının import'u diğer testlerin çalışma sırasından bağımsızdır.
+
+Eski deneysel kaynak biçimi otomatik dönüştürülmez veya silinmez. Bu güvenlik
+sıkılaştırması üretime hazır olunduğu anlamına gelmez: 5.4 **prototip** olarak
+kalır; yeni bağımsız inceleme bekler. 5.5 dış supervisor ve diğer açık güvenlik
+kapıları bu geliştirmede uygulanmadı.

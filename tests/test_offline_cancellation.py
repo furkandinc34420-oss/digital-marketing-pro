@@ -288,9 +288,11 @@ class TestDockerCancellation(unittest.TestCase):
         for states,fail in (([True,False,False],False),([True,True,False],False),([True,True,True],True)):
             lab=DockerLab();control=x.ExecutionControl(A,'stop','u',lambda:None)
             calls=[];iterator=iter(states)
+            from test_offline_isolation import register_owned
+            config=register_owned(lab,'container','a'*64)
             def docker(*args,**kwargs):
                 calls.append(args[0])
-                if args[0]=='inspect':return json.dumps([{'State':{'Running':next(iterator)}}])
+                if args[0]=='inspect':return json.dumps([{**config,'State':{'Running':next(iterator)}}])
                 return ''
             with mock.patch.object(lab,'_docker',side_effect=docker),mock.patch.object(lab,'_validate_config'),control.bind():
                 if fail:

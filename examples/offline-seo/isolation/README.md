@@ -159,3 +159,9 @@ Bu işlem canonical, robots meta, H1 ve bağlantıları yalnızca HTML üzerinde
 ## Birleşik SEO denetimi
 
 `seo.audit` için [Türkçe kullanım, rapor ve güvenlik sınırları](SEO_AUDIT.md).
+
+## Kalıcı kaynak izi (5.4)
+
+[Kalıcı Docker kaynak sahipliği](RESOURCE_OWNERSHIP.md), host tarafında müşteri,
+görev ve yürütmeyi Docker etiketleriyle doğrulanmış kaynaklara bağlar.
+Süreç ölümü belirsiz kaynakları otomatik temizlemez; dış supervisor henüz yoktur.

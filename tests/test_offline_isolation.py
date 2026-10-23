@@ -123,6 +123,26 @@ class TestOfflineIsolation(unittest.TestCase):
             lab.run("demo-musteri", "analyze")
 
 
+def register_owned(lab, kind, resource, customer='demo-musteri'):
+    """Test fixture: real SQLite provenance, synthetic Docker inspect response."""
+    from resource_store import ResourceStore
+    if not hasattr(lab, '_fixture_state'):
+        lab._fixture_state = tempfile.TemporaryDirectory(prefix='dmp-owned-fixture-')
+        unittest.addModuleCleanup(lab._fixture_state.cleanup)
+        lab.resource_store = ResourceStore(Path(lab._fixture_state.name)/'resources')
+    existing = next((r for r in lab.resource_store.records(customer) if r['resource']==resource),None)
+    if existing is None:
+        row=lab.resource_store.intent(customer,lab.resource_task,lab.resource_execution,kind)
+        lab.resource_store.transition(row,'not_sent','sent_unconfirmed')
+    else: row=existing
+    lab._bindings[row['attempt']]=row
+    key,value=lab.label.split('=',1)
+    config={'Id':resource,'Config':{'Labels':{**lab.resource_store.labels(row),key:value}}}
+    if kind=='container':config['HostConfig']={}
+    if existing is None:lab.resource_store.verify(row,resource,config)
+    return config
+
+
 class FakeDocker:
     """Fault injection only. Actual cross-customer integration tests stay above."""
     def __init__(self, lab):
@@ -145,8 +165,10 @@ class FakeDocker:
             resource = args[1]
             if resource not in self.images | self.containers:
                 raise RuntimeError("No such object")
-            key, value = self.lab.label.split("=", 1)
-            return json.dumps([{"Config": {"Labels": {key: "foreign" if resource in self.foreign else value}}}])
+            config=register_owned(self.lab,"image" if resource.startswith("sha256:") else "container",resource)
+            key,value=self.lab.label.split("=",1)
+            if resource in self.foreign:config["Config"]["Labels"][key]="foreign"
+            return json.dumps([config])
         if args[0] == "rm" or args[:2] == ("image", "rm"):
             resource = args[-1]
             if resource in self.fail_remove:

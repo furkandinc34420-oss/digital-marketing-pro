@@ -101,8 +101,10 @@ class TestDispatchSafety(unittest.TestCase):
                 lab=runner.DockerLab()
                 def spawn(command,**kwargs):
                     return original([sys.executable,'-B','-c','import time;time.sleep(30)'],**kwargs)
-                with mock.patch.object(runner.subprocess,'Popen',side_effect=spawn):
-                    with self.assertRaises(subprocess.TimeoutExpired):lab._docker(operation,'synthetic',timeout=.03)
+                with mock.patch.object(runner.subprocess,'Popen',side_effect=spawn),mock.patch.object(lab,'_verified_image'):
+                    request=(operation,'synthetic')
+                    if operation=='create':lab._active_create=request  # Stub only the already-validated request admission.
+                    with self.assertRaises(subprocess.TimeoutExpired):lab._docker(*request,timeout=.03)
                 self.assertEqual(lab.creation_states[kind],'sent_unconfirmed')
                 self.assertIn(kind,lab.pending_creations)
                 with mock.patch.object(lab,'_docker',return_value=''):
@@ -110,7 +112,8 @@ class TestDispatchSafety(unittest.TestCase):
 
     def test_definite_popen_failure_stays_not_sent(self):
         lab=runner.DockerLab()
-        with mock.patch.object(runner.subprocess,'Popen',side_effect=FileNotFoundError('synthetic')):
+        lab._active_create=('create','synthetic')
+        with mock.patch.object(runner.subprocess,'Popen',side_effect=FileNotFoundError('synthetic')),mock.patch.object(lab,'_verified_image'):
             with self.assertRaises(FileNotFoundError):lab._docker('create','synthetic')
         self.assertFalse(lab.pending_creations)
         self.assertEqual(lab.creation_states['container'],'not_sent')
@@ -119,9 +122,12 @@ class TestDispatchSafety(unittest.TestCase):
         fixture=isolation_tests.TestIsolationSecurity();fixture.lab=runner.DockerLab()
         lab=fixture.lab;config=fixture.good_config();config['State']={'Running':False,'ExitCode':0}
         backend=isolation_tests.FakeDocker(lab);cid='b'*64
+        image_cfg=isolation_tests.register_owned(lab,'image',lab.images[A])
+        owned=isolation_tests.register_owned(lab,'container',cid)
+        config['Id']=cid;config['Config']['Labels'].update(owned['Config']['Labels'])
         def docker(*args,**kwargs):
             if args[0]=='create':backend.containers.add(cid);return cid
-            if args[0]=='inspect':return json.dumps([config])
+            if args[0]=='inspect':return json.dumps([image_cfg if args[1]==lab.images[A] else config])
             if args[0]=='start':return json.dumps({'synthetic':True})
             return backend(*args,**kwargs)
         with mock.patch.object(lab,'_docker',side_effect=docker):lab.run(A,'probe')
@@ -140,12 +146,13 @@ class TestDispatchSafety(unittest.TestCase):
     def test_stop_and_cleanup_failure_never_become_stopped(self):
         lab=runner.DockerLab();lab.images[A]='sha256:'+'a'*64;cid='b'*64
         key,value=lab.label.split('=',1)
-        config={'Config':{'Labels':{key:value}},'State':{'Running':True}}
+        image_cfg=isolation_tests.register_owned(lab,'image',lab.images[A])
+        config=isolation_tests.register_owned(lab,'container',cid);config['State']={'Running':True}
         control=x.ExecutionControl(A,'stop-failure','u',lambda:None);calls=[]
         def docker(*args,**kwargs):
             calls.append(args[0])
             if args[0]=='create':return cid
-            if args[0]=='inspect':return json.dumps([config])
+            if args[0]=='inspect':return json.dumps([image_cfg if args[1]==lab.images[A] else config])
             if args[0]=='ps':return cid
             if args[0]=='start':control.request();raise x.TaskCancelled('synthetic')
             raise RuntimeError('synthetic daemon failure')

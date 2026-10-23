@@ -144,3 +144,9 @@ sınırları için [birleşik denetim belgesi](SEO_AUDIT.md).
 Yeni `AccessService`, kimlik sağlayıcı arayüzü ve her istekte güncel müşteri/rol
 kontrolü için [prototipin güven sınırları](ACCESS_CONTROL.md). Mevcut CLI güvenilir
 yerel kullanım aracıdır; bu katman gerçek kullanıcı girişi veya API açmaz.
+
+## Kalıcı kaynak izi (5.4)
+
+[Kalıcı Docker kaynak sahipliği](RESOURCE_OWNERSHIP.md), host tarafında müşteri,
+görev ve yürütmeyi Docker etiketleriyle doğrulanmış kaynaklara bağlar.
+Süreç ölümü belirsiz kaynakları otomatik temizlemez; dış supervisor henüz yoktur.
