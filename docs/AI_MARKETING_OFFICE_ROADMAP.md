@@ -96,7 +96,7 @@ yayına çıkış gerekçesi değildir; çok süreçli dağıtım için ayrıca 
 | 5.3 Süreç içi iptal ve SQLite kontrol maliyeti | prototip / P0 / 5 | 5.1–5.2, 2.1 | İptal ile Popen kısa kilitte sıralanır; gönderilmemiş create/import sahte stop_failed üretmez; gönderilmiş belirsiz sonuç unutulmaz; gerçek durma doğrulanır; müşteriler etkilenmez. Aynı kilitli kapsamda kontrol tekrarı azalırken sonraki istekte güncel yetki/depo kontrol edilir. | [Kontrol](../examples/offline-seo/isolation/execution_control.py), [iptal belgesi](../examples/offline-seo/isolation/CANCELLATION.md), [iptal testi](../tests/test_offline_cancellation.py), [başlatma testi](../tests/test_offline_dispatch.py) |
 | 5.4 Kalıcı görev–Docker kaynak sahipliği | prototip / P0 / 5 | 3.1, 5.3; mevcut özeti ve kilitleri koruyan kayıt tasarımı | Müşteri, görev, benzersiz yürütme ve kaynak kimliği güvenilir kayıtta bağlanır; niyet gönderimden önce kalıcıdır; not_sent/sent_unconfirmed/identified ayrımı restart sonrası korunur; eksik/çelişkili sahiplikte başka kaynak durdurulmaz; create/import öncesi/sonrası öldürme testleri geçer. Docker ile SQLite arasında atomiklik varsayılmaz. | Başlangıç: [runner](../examples/offline-seo/isolation/runner.py), [koordinatör](../examples/offline-seo/isolation/coordinator.py), [yaşam döngüsü testleri](../tests/test_offline_dispatch.py), [kalıcı depo ve Docker testleri](../tests/test_offline_resource_store.py), [kabul kanıtı ve sınırlar](../examples/offline-seo/isolation/RESOURCE_OWNERSHIP.md) |
 | 5.5 SIGKILL sonrası dış supervisor | prototip / P0 / 5 | 5.4, 2.2; ana süreçten bağımsız yaşam döngüsü | Gerçek ana süreç SIGKILL testinde işçi bulunur; kayıt ve Docker sahipliği eşleşir; başka müşterinin/asıl görevin işçisi etkilenmez; kontrollü/zorunlu durma inspect ile doğrulanır; doğrulanamayan durum hata olur. Yeniden PID kullanımına güvenilmez; süre hedefi testte ölçülür. | [Supervisor ve sınırlar](../examples/offline-seo/isolation/SUPERVISOR.md), [kod](../examples/offline-seo/isolation/supervisor.py), [testler](../tests/test_offline_supervisor.py) |
-| 5.6 Artık kaynak uzlaştırma ve operatör uyarıları | planlandı / P0 / 5 | 5.4–5.5, 5.7 kayıt sözleşmesi | Daemon kesintisi, lost reply ve stop/cleanup hatası kalıcı görünür; tekrar uzlaştırma idempotent olur; yalnızca doğrulanmış kaynaklar temizlenir, genel prune yoktur; çözülemeyen kaynaklar güvenilir operatöre bildirilir; görev yanlış başarılı gösterilmez. | Başlangıç: [mevcut temizleme](../examples/offline-seo/isolation/runner.py), [hata testleri](../tests/test_offline_dispatch.py) |
+| 5.6 Artık kaynak uzlaştırma ve operatör uyarıları | prototip / P0 / 5 | 5.4–5.5, 5.7 kayıt sözleşmesi | Daemon kesintisi, lost reply ve stop/cleanup hatası kalıcı görünür; tekrar uzlaştırma idempotent olur; yalnızca doğrulanmış kaynaklar temizlenir, genel prune yoktur; çözülemeyen kaynaklar güvenilir operatöre bildirilir; görev yanlış başarılı gösterilmez. | [Uzlaştırma](../examples/offline-seo/isolation/reconciliation.py), [sözleşme ve sınırlar](../examples/offline-seo/isolation/RECONCILIATION.md), [testler](../tests/test_offline_reconciliation.py) |
 | 5.7 Kalıcı güvenlik ve yönetici denetim kayıtları | planlandı / P0 / 5 | 5.1, olay/veri saklama politikası | Kimlik/üyelik değişimi, erişim reddi, iptal ve kaynak hataları işlem kimliğiyle izlenir; sır/token/ham rapor yazılmaz; müşteri ayrımı, erişim izinleri, saklama/boyut sınırı ve silme politikası test edilir; kayıt arızasında kritik işlemin davranışı tanımlıdır. Mevcut bellek kuyruğu kalıcı kayıt sayılmaz. | Başlangıç: [erişim olayları](../examples/offline-seo/isolation/access_control.py), [yönetici hata kayıtları](../examples/offline-seo/isolation/coordinator.py) |
 | 5.8 Yedekleme, güvenli kurtarma ve şema geçişleri | planlandı / P0 / 5 | 5.1, 5.4, 5.7; RPO/RTO ve anahtar sorumlusu | Tutarlı SQLite yedeği alınır; ayrı ortamda geri yükleme provası veri kaybı/süre hedefini ölçer; iptal edilmiş yetki ve oturum geri gelmez; eski/bozuk şema otomatik sıfırlanmaz; şifreleme, erişim ve anahtar kurtarma prosedürü sınanır. Kaynak kayıtları Docker gerçeğiyle uzlaştırılmadan görev başlatılmaz. | Mevcut sınır: [kimlik deposu](../examples/offline-seo/isolation/IDENTITY_STORE.md), [koordinatör](../examples/offline-seo/isolation/COORDINATOR.md) |
 | 5.9 Gerçek OIDC sağlayıcı adaptörü | planlandı / P0 / 5 | 5.1–5.2; güvenilir sağlayıcı/istemci ayarı ve bağımsız inceleme | İzinli issuer/audience/azp, imza ve algoritma, süre, tek kullanımlık nonce/state, PKCE ve anahtar rotasyonu olumlu/olumsuz testlerden geçer; e-posta hesap kanıtı sayılmaz; dış token rolü yerel üyeliği aşamaz; sırlar loglanmaz. Fixture issue() gerçek girişe açılmaz. | Arayüz/tasarım: [oturum belgesi](../examples/offline-seo/isolation/SESSION_SECURITY.md), [IdentityProvider](../examples/offline-seo/isolation/access_control.py) |
@@ -235,3 +235,40 @@ tam artık imaj/unknown kaynak uzlaştırması, kalıcı operatör uyarıları v
 review çözüm aracı yoktur. Bunlar 5.6/5.7/5.8 ve ilgili operasyon kapılarıdır.
 Eski kayıtlara yaşam kilidi uydurulmaz. Çok süreçli oturum/üyelik iptali 5.11'de
 ayrı kalır. Gerçek OIDC/API veya canlı uygulama yeteneği eklenmedi.
+
+
+### 5.6 bilinen kaynakların uzlaştırılması ve yerel operatör uyarıları
+
+Çevrimdışı prototip; aynı kaynak SQLite deposunu şema 3 ile genişletir. Varsayılan
+çağrı yalnızca Docker gözlemi yapar; yerel gözlemleri kalıcı tutar. Açık --apply ve
+review kayıtları için ayrıca --retry-reviewed seçimi olmadan otomatik temizleme
+yapmaz. Tam kimlik/etiket/tenant/task/execution ve serbest execution claim gerekir.
+5.5 Supervisor ve müşteri görev kayıtları değiştirilmeden kullanılır.
+
+Kanıtlanan küçük kapsam: bilinen kaynaklarda daemon/yanıt hataları, belirsiz
+oluşturma ve stop/remove hataları, tekrar güvenliği, restart sonrası uyarılar,
+sağlıklı ikinci müşterinin korunması ve görev DB'sinin değişmezliği. Son gözlem
+koşul başına tek kayıttır; revision yalnızca değişince artar. Türkçe operatör
+uyarıları ve sürümlü event projeksiyonu vardır. Bir çağrıda en fazla 100 kaynak
+incelenir; kısmi tarama açıkça bildirilir. Ayrıntılı test kanıtı teknik belgededir.
+
+**5.7 planlandı olarak kalır.** Append-only güvenlik geçmişi, aktör/SSO onayı,
+kalıcı dış bildirim teslimi ve saklama/silme politikası henüz yoktur. DB'de izi
+olmayan kaynakların global envanteri/benimsenmesi, kayıp depo kurtarma, çok host,
+reboot/power-loss ve uzun süreli yük sınanmamıştır. Bu nedenle 5.6 **prototip**
+olarak işaretlenir; tam host uzlaştırması veya üretim güvenliği tamamlandı denmez.
+
+
+5.6 eleştirel inceleme sonrası: iki orta ve üç düşük bulgu giderildi. Meşgul
+claim açık uyarıları kapatmaz; eski kaynak snapshot'ıyla gözlem yazılamaz; rapor
+tek SQLite snapshot'ında oluşturulur; Python müdahale seçenekleri gerçek bool
+olmalıdır; boş taramada daemon hatası başarılı çıkışa dönüşmez. Altı yeni regresyon
+ile tam paket 1096 toplam / 1087 başarılı / 9 atlanan / 0 başarısız geçti.
+5.6 prototip, 5.7 planlandı olarak kalır; üretim kapıları değişmedi.
+
+
+Durum özeti: **5.5 ve 5.6'nın yukarıda tanımlanan çevrimdışı prototip kapsamları
+ve güvenlik incelemesi düzeltmeleri tamamlandı.** İki aşamanın durumu da
+**prototip** olarak kalır; **üretime hazır değildirler**. 5.6'nın bilinen kaynak
+kayıtlarıyla sınırlı olması ve diğer açık operasyon kapıları yukarıda belirtilmiştir.
+**5.7 planlandı**; bu kayıtla tamamlandı olarak işaretlenmez.

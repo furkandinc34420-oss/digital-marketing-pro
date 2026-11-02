@@ -15,6 +15,14 @@ LEASE_SCHEMA = "CREATE TABLE execution_leases (execution TEXT PRIMARY KEY, task 
 RESULT_SCHEMA = "CREATE TABLE supervisor_results (attempt TEXT PRIMARY KEY REFERENCES resource_ownership(attempt), outcome TEXT NOT NULL)"
 OUTCOMES = {'stopping', 'removed', 'review'}
 
+OBSERVATION_SCHEMA = "CREATE TABLE reconciliation_observations (attempt TEXT PRIMARY KEY REFERENCES resource_ownership(attempt), code TEXT NOT NULL, revision INTEGER NOT NULL)"
+RECONCILIATION_CODES = {
+    'active', 'not_sent', 'orphan_present', 'absent_observed',
+    'pending_unresolved', 'ownership_mismatch', 'docker_unavailable', 'missing_lease',
+    'review_required', 'cleanup_pending', 'cleanup_failed', 'removed', 'image_blocked',
+    'busy', 'removed_but_present',
+}
+
 _SCOPE = ContextVar('docker_resource_scope', default=None)
 MAX_RECORDS = 10000
 MAX_DB_BYTES = 64 * 1024 * 1024
@@ -149,15 +157,17 @@ class ResourceStore:
     def _schema(db, customer):
         objects = {(r[0],r[1]) for r in db.execute("SELECT type,name FROM sqlite_master WHERE type IN ('table','view','trigger')")}
         version = db.execute('PRAGMA user_version').fetchone()[0]
-        extra = {('table','execution_leases'),('table','supervisor_results')} if version == 2 else set()
+        extra = {('table','execution_leases'),('table','supervisor_results')} if version in (2,3) else set()
+        if version == 3: extra.add(('table','reconciliation_observations'))
         if objects != {('table','resource_meta'),('table','resource_ownership')} | extra:
             raise OwnershipError('Wrong resource database type')
         definitions = dict(db.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"))
         expected = {'resource_meta':META_SCHEMA, 'resource_ownership':SCHEMA}
-        if version == 2: expected.update(execution_leases=LEASE_SCHEMA, supervisor_results=RESULT_SCHEMA)
+        if version in (2,3): expected.update(execution_leases=LEASE_SCHEMA, supervisor_results=RESULT_SCHEMA)
+        if version == 3: expected['reconciliation_observations']=OBSERVATION_SCHEMA
         if definitions != expected:
             raise OwnershipError('Invalid resource schema')
-        if version not in (1,2) or [tuple(r) for r in db.execute('SELECT * FROM resource_meta')] != [(STORE_KIND,customer,version)]:
+        if version not in (1,2,3) or [tuple(r) for r in db.execute('SELECT * FROM resource_meta')] != [(STORE_KIND,customer,version)]:
             raise OwnershipError('Invalid resource store marker')
 
     @contextmanager
@@ -175,9 +185,9 @@ class ResourceStore:
                     db.execute(f"PRAGMA max_page_count={MAX_DB_BYTES // db.execute('PRAGMA page_size').fetchone()[0]}")
                     if new:
                         db.execute('BEGIN IMMEDIATE'); db.execute(META_SCHEMA); db.execute(SCHEMA)
-                        db.execute(LEASE_SCHEMA); db.execute(RESULT_SCHEMA)
-                        db.execute('INSERT INTO resource_meta VALUES (?,?,2)', (STORE_KIND,customer))
-                        db.execute('PRAGMA user_version=2'); db.commit()
+                        db.execute(LEASE_SCHEMA); db.execute(RESULT_SCHEMA); db.execute(OBSERVATION_SCHEMA)
+                        db.execute('INSERT INTO resource_meta VALUES (?,?,3)', (STORE_KIND,customer))
+                        db.execute('PRAGMA user_version=3'); db.commit()
                     self._schema(db,customer)
                     if [r[0] for r in db.execute('PRAGMA integrity_check')] != ['ok']:
                         raise OwnershipError('Invalid resource ownership store')
@@ -190,15 +200,8 @@ class ResourceStore:
                             raise OwnershipError('Conflicting resource records')
                         attempts.add(row['attempt']); proofs.add(row['proof'])
                         if row['resource'] is not None: resources.add(row['resource'])
-                    if db.execute('PRAGMA user_version').fetchone()[0] == 1:
-                        # Only an exact, previously validated v1 store is upgraded.
-                        if [r[0] for r in db.execute('PRAGMA integrity_check')] != ['ok']:
-                            raise OwnershipError('Invalid legacy resource store')
-                        db.execute('BEGIN IMMEDIATE')
-                        db.execute(LEASE_SCHEMA); db.execute(RESULT_SCHEMA)
-                        db.execute('UPDATE resource_meta SET version=2')
-                        db.execute('PRAGMA user_version=2'); self._commit(db)
-                    leases = db.execute('SELECT * FROM execution_leases LIMIT ?', (MAX_RECORDS+1,)).fetchall()
+                    version=db.execute('PRAGMA user_version').fetchone()[0]
+                    leases = db.execute('SELECT * FROM execution_leases LIMIT ?', (MAX_RECORDS+1,)).fetchall() if version>=2 else []
                     if len(leases) > MAX_RECORDS: raise OwnershipError('Lease budget exceeded')
                     for lease in leases:
                         if (not isinstance(lease['execution'],str) or not re.fullmatch('[a-f0-9]{32}',lease['execution'])
@@ -206,13 +209,27 @@ class ResourceStore:
                                 or type(lease['device']) is not int or lease['device'] < 0
                                 or type(lease['inode']) is not int or lease['inode'] <= 0):
                             raise OwnershipError('Invalid execution lease')
-                    outcomes = db.execute('SELECT * FROM supervisor_results LIMIT ?', (MAX_RECORDS+1,)).fetchall()
+                    outcomes = db.execute('SELECT * FROM supervisor_results LIMIT ?', (MAX_RECORDS+1,)).fetchall() if version>=2 else []
                     ownership = {r['attempt']:r for r in records}
                     if len(outcomes)>MAX_RECORDS or any(
                             r['outcome'] not in OUTCOMES or r['attempt'] not in attempts
                             or r['outcome']=='removed' and ownership[r['attempt']]['state']!='removed'
                             for r in outcomes):
                         raise OwnershipError('Invalid supervisor outcome')
+                    if version<3:
+                        db.execute('BEGIN IMMEDIATE')
+                        if version==1:
+                            db.execute(LEASE_SCHEMA);db.execute(RESULT_SCHEMA)
+                        db.execute(OBSERVATION_SCHEMA)
+                        db.execute('UPDATE resource_meta SET version=3')
+                        db.execute('PRAGMA user_version=3');self._commit(db)
+                    observations=db.execute('SELECT * FROM reconciliation_observations LIMIT ?', (MAX_RECORDS+1,)).fetchall()
+                    if len(observations)>MAX_RECORDS or any(
+                            r['attempt'] not in attempts or r['code'] not in RECONCILIATION_CODES
+                            or r['code']=='removed' and ownership[r['attempt']]['state']!='removed'
+                            or type(r['revision']) is not int or not 1<=r['revision']<=1000000000
+                            for r in observations):
+                        raise OwnershipError('Invalid reconciliation observation')
                     yield db
                 finally: db.close()
         except BaseException as exc:
@@ -370,3 +387,55 @@ class ResourceStore:
             yield fd is not None
         finally:
             if fd is not None: os.close(fd)
+
+
+    def observation(self, binding, code, *, preserve_existing=False):
+        """Current condition, not an append-only security audit (future 5.7)."""
+        if code not in RECONCILIATION_CODES or type(preserve_existing) is not bool:
+            raise OwnershipError('Invalid observation selection')
+        with self._session(binding['customer']) as db:
+            row=db.execute('SELECT * FROM resource_ownership WHERE attempt=?',(binding['attempt'],)).fetchone()
+            if row is None or any(row[k]!=binding[k] for k in (*FIELDS,'state','resource')):
+                raise OwnershipError('Observation source snapshot changed')
+            if code=='removed' and row['state']!='removed':
+                raise OwnershipError('Removal observation conflicts with ownership lifecycle')
+            previous=db.execute('SELECT code,revision FROM reconciliation_observations WHERE attempt=?',(binding['attempt'],)).fetchone()
+            if previous is not None and (preserve_existing or previous['code']==code):
+                return previous['revision']
+            revision=previous['revision']+1 if previous else 1
+            if revision>1000000000:raise OwnershipError('Observation revision exhausted')
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('INSERT INTO reconciliation_observations VALUES (?,?,?) ON CONFLICT(attempt) DO UPDATE SET code=excluded.code,revision=excluded.revision',
+                       (binding['attempt'],code,revision))
+            self._commit(db)
+            return revision
+
+    def observations(self, customer):
+        with self._session(customer) as db:
+            return [dict(r) for r in db.execute('SELECT * FROM reconciliation_observations ORDER BY attempt')]
+
+    def operator_snapshot(self, customer):
+        """One tenant lock and one SQLite snapshot for sources and observations."""
+        with self._session(customer) as db:
+            db.execute('BEGIN')
+            rows=[dict(r) for r in db.execute('SELECT * FROM resource_ownership ORDER BY attempt')]
+            observations=[dict(r) for r in db.execute('SELECT * FROM reconciliation_observations ORDER BY attempt')]
+            return rows,observations
+
+    def reconcile_absent(self, binding):
+        """Trusted operator: known full ID observed absent while holding orphan claim.
+
+        No Docker delete and no task success. Caller must perform a fresh complete
+        Docker listing; this is NOT permission to remove an unknown resource.
+        """
+        with self._session(binding['customer']) as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT * FROM resource_ownership WHERE attempt=?',(binding['attempt'],)).fetchone()
+            if (row is None or any(row[k]!=binding[k] for k in FIELDS)
+                    or row['state']!='identified' or row['resource']!=binding['resource']):
+                raise OwnershipError('Absent resource binding mismatch')
+            db.execute("UPDATE resource_ownership SET state='removed' WHERE attempt=?",(binding['attempt'],))
+            prior=db.execute('SELECT outcome FROM supervisor_results WHERE attempt=?',(binding['attempt'],)).fetchone()
+            if prior is not None:
+                db.execute("UPDATE supervisor_results SET outcome='removed' WHERE attempt=?",(binding['attempt'],))
+            self._commit(db)

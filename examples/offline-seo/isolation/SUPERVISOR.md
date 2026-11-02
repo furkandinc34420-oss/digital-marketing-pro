@@ -174,3 +174,14 @@ review çözüm aracı ve tam uzlaştırma/uyarı sistemi hâlâ ayrı işlerdir
 
 İnceleme kararı: bu düzeltmelerle **GitHub'a çevrimdışı prototip olarak kaydetmeye
 hazır**. Üretim onayı değildir. Bu incelemede commit/push/PR/merge/deployment yoktur.
+
+
+## 5.6 ile eklenen sınırlı operatör uzlaştırması
+
+[5.6 uzlaştırma belgesi](RECONCILIATION.md) aynı kaynak deposunun doğrulanmış
+sürüm 1/2'den transaction ile sürüm 3'e geçişini ve kalıcı son gözlem tablosunu
+anlatır. Ayrı operatör komutu bilinen kaynakları inceler; varsayılan Docker
+mutasyonu yapmaz. --apply ve gereken açık review tekrar seçimi, mevcut tam sahiplik
+ve execution claim kontrollerini atlamaz. 5.5 otomatik review mandalı korunur;
+Supervisor'a genel prune veya yeni otomatik imaj temizleme eklenmez. Eski
+kaynak/yürütme kanıtları değişmez. 5.7 güvenlik olay geçmişi hâlâ tamamlanmadı.

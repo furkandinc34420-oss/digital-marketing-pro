@@ -158,10 +158,10 @@ class TestSupervisor(unittest.TestCase):
         self.store.records(A)
         path=self.root/A/'resources.sqlite3'
         with sqlite3.connect(path) as db:
-            db.execute('DROP TABLE execution_leases');db.execute('DROP TABLE supervisor_results')
+            db.execute('DROP TABLE execution_leases');db.execute('DROP TABLE supervisor_results');db.execute('DROP TABLE reconciliation_observations')
             db.execute('UPDATE resource_meta SET version=1');db.execute('PRAGMA user_version=1')
         self.assertEqual(ResourceStore(self.root).leases(A),[])
-        with sqlite3.connect(path) as db:self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],2)
+        with sqlite3.connect(path) as db:self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],3)
 
     def test_execution_cannot_be_reused(self):
         with self.store.execution_lease(A,'job',EXEC):pass
@@ -255,7 +255,7 @@ class TestSupervisor(unittest.TestCase):
     def test_invalid_v1_record_is_not_migrated(self):
         self.resource(False);path=self.root/A/'resources.sqlite3'
         with sqlite3.connect(path) as db:
-            db.execute('DROP TABLE execution_leases');db.execute('DROP TABLE supervisor_results')
+            db.execute('DROP TABLE execution_leases');db.execute('DROP TABLE supervisor_results');db.execute('DROP TABLE reconciliation_observations')
             db.execute('UPDATE resource_meta SET version=1');db.execute('PRAGMA user_version=1')
             db.execute("UPDATE resource_ownership SET task='../invalid'")
         before=path.read_bytes()
