@@ -177,3 +177,14 @@ almıyor; güvenilir `runner.seo` yükleyicisinden kullanıyor. Temiz Python sü
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/tests/offline_guard:$PWD/examples/offline-seo/isolation" python -B -m unittest discover -s tests -p test_offline_resource_store.py -v
 ```
+
+
+## 5.5 ile eklenen bağımsız gözetim
+
+Yukarıdaki 5.4/5.3 sınırları o aşamaların kapsamıdır. [5.5 supervisor prototipi](SUPERVISOR.md)
+artık coordinator tarafından başlatılmayan ayrı host sürecinde çalışabilir.
+Aynı kaynak deposunun doğrulanmış v1 şeması transaction ile v2'ye genişletilir;
+sahiplik kanıtları ve eski yaşam döngüsü korunur. Yürütme kilidi olmayan eski
+kayıtlar otomatik durdurulmaz. Docker durması/kaldırılması doğrulanmadan başarı
+yazılmaz. İmaj uzlaştırması, servis deployment'ı ve süreçler arası oturum iptali
+eklenmedi. İşçilerin host DB/socket erişim sınırı değişmedi.

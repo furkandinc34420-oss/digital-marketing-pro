@@ -11,6 +11,10 @@ import re
 import tempfile
 import uuid
 
+LEASE_SCHEMA = "CREATE TABLE execution_leases (execution TEXT PRIMARY KEY, task TEXT NOT NULL, device INTEGER NOT NULL, inode INTEGER NOT NULL)"
+RESULT_SCHEMA = "CREATE TABLE supervisor_results (attempt TEXT PRIMARY KEY REFERENCES resource_ownership(attempt), outcome TEXT NOT NULL)"
+OUTCOMES = {'stopping', 'removed', 'review'}
+
 _SCOPE = ContextVar('docker_resource_scope', default=None)
 MAX_RECORDS = 10000
 MAX_DB_BYTES = 64 * 1024 * 1024
@@ -144,12 +148,16 @@ class ResourceStore:
     @staticmethod
     def _schema(db, customer):
         objects = {(r[0],r[1]) for r in db.execute("SELECT type,name FROM sqlite_master WHERE type IN ('table','view','trigger')")}
-        if objects != {('table','resource_meta'),('table','resource_ownership')}:
+        version = db.execute('PRAGMA user_version').fetchone()[0]
+        extra = {('table','execution_leases'),('table','supervisor_results')} if version == 2 else set()
+        if objects != {('table','resource_meta'),('table','resource_ownership')} | extra:
             raise OwnershipError('Wrong resource database type')
         definitions = dict(db.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"))
-        if definitions != {'resource_meta':META_SCHEMA, 'resource_ownership':SCHEMA}:
+        expected = {'resource_meta':META_SCHEMA, 'resource_ownership':SCHEMA}
+        if version == 2: expected.update(execution_leases=LEASE_SCHEMA, supervisor_results=RESULT_SCHEMA)
+        if definitions != expected:
             raise OwnershipError('Invalid resource schema')
-        if db.execute('PRAGMA user_version').fetchone()[0] != 1 or [tuple(r) for r in db.execute('SELECT * FROM resource_meta')] != [(STORE_KIND,customer,1)]:
+        if version not in (1,2) or [tuple(r) for r in db.execute('SELECT * FROM resource_meta')] != [(STORE_KIND,customer,version)]:
             raise OwnershipError('Invalid resource store marker')
 
     @contextmanager
@@ -167,8 +175,9 @@ class ResourceStore:
                     db.execute(f"PRAGMA max_page_count={MAX_DB_BYTES // db.execute('PRAGMA page_size').fetchone()[0]}")
                     if new:
                         db.execute('BEGIN IMMEDIATE'); db.execute(META_SCHEMA); db.execute(SCHEMA)
-                        db.execute('INSERT INTO resource_meta VALUES (?,?,1)', (STORE_KIND,customer))
-                        db.execute('PRAGMA user_version=1'); db.commit()
+                        db.execute(LEASE_SCHEMA); db.execute(RESULT_SCHEMA)
+                        db.execute('INSERT INTO resource_meta VALUES (?,?,2)', (STORE_KIND,customer))
+                        db.execute('PRAGMA user_version=2'); db.commit()
                     self._schema(db,customer)
                     if [r[0] for r in db.execute('PRAGMA integrity_check')] != ['ok']:
                         raise OwnershipError('Invalid resource ownership store')
@@ -181,6 +190,29 @@ class ResourceStore:
                             raise OwnershipError('Conflicting resource records')
                         attempts.add(row['attempt']); proofs.add(row['proof'])
                         if row['resource'] is not None: resources.add(row['resource'])
+                    if db.execute('PRAGMA user_version').fetchone()[0] == 1:
+                        # Only an exact, previously validated v1 store is upgraded.
+                        if [r[0] for r in db.execute('PRAGMA integrity_check')] != ['ok']:
+                            raise OwnershipError('Invalid legacy resource store')
+                        db.execute('BEGIN IMMEDIATE')
+                        db.execute(LEASE_SCHEMA); db.execute(RESULT_SCHEMA)
+                        db.execute('UPDATE resource_meta SET version=2')
+                        db.execute('PRAGMA user_version=2'); self._commit(db)
+                    leases = db.execute('SELECT * FROM execution_leases LIMIT ?', (MAX_RECORDS+1,)).fetchall()
+                    if len(leases) > MAX_RECORDS: raise OwnershipError('Lease budget exceeded')
+                    for lease in leases:
+                        if (not isinstance(lease['execution'],str) or not re.fullmatch('[a-f0-9]{32}',lease['execution'])
+                                or not isinstance(lease['task'],str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}',lease['task'])
+                                or type(lease['device']) is not int or lease['device'] < 0
+                                or type(lease['inode']) is not int or lease['inode'] <= 0):
+                            raise OwnershipError('Invalid execution lease')
+                    outcomes = db.execute('SELECT * FROM supervisor_results LIMIT ?', (MAX_RECORDS+1,)).fetchall()
+                    ownership = {r['attempt']:r for r in records}
+                    if len(outcomes)>MAX_RECORDS or any(
+                            r['outcome'] not in OUTCOMES or r['attempt'] not in attempts
+                            or r['outcome']=='removed' and ownership[r['attempt']]['state']!='removed'
+                            for r in outcomes):
+                        raise OwnershipError('Invalid supervisor outcome')
                     yield db
                 finally: db.close()
         except BaseException as exc:
@@ -219,7 +251,9 @@ class ResourceStore:
     def _commit(self, db):
         db.commit()
 
-    def transition(self, binding, before, after, resource=None):
+    def transition(self, binding, before, after, resource=None, *, supervisor_outcome=None):
+        if supervisor_outcome is not None and (before,after,supervisor_outcome)!=('identified','removed','removed'):
+            raise OwnershipError('Invalid atomic supervisor transition')
         customer = binding['customer']
         allowed = {('not_sent','sent_unconfirmed'), ('sent_unconfirmed','not_sent'),
                    ('sent_unconfirmed','identified'), ('identified','removed')}
@@ -230,11 +264,18 @@ class ResourceStore:
             row = db.execute('SELECT * FROM resource_ownership WHERE attempt=?', (binding['attempt'],)).fetchone()
             if row is None or any(row[k] != binding[k] for k in FIELDS) or row['state'] != before:
                 raise OwnershipError('Resource binding conflict')
+            if supervisor_outcome is not None:
+                prior=db.execute('SELECT outcome FROM supervisor_results WHERE attempt=?',(binding['attempt'],)).fetchone()
+                if resource!=row['resource'] or prior is None or prior[0]!='stopping':
+                    raise OwnershipError('Supervisor completion conflicts with recorded decision')
             value = resource if after in ('identified','removed') else None
             updated = dict(row); updated.update(state=after, resource=value)
             self._validate(updated, customer)
             db.execute('UPDATE resource_ownership SET state=?,resource=? WHERE attempt=? AND state=?',
                        (after, value, binding['attempt'], before))
+            if supervisor_outcome is not None:
+                db.execute('UPDATE supervisor_results SET outcome=? WHERE attempt=?',
+                           (supervisor_outcome,binding['attempt']))
             self._commit(db)
         return updated
 
@@ -266,3 +307,66 @@ class ResourceStore:
         if stored['state'] != 'identified' or stored['resource'] != resource:
             raise OwnershipError('Resource ownership is not active')
         return stored
+
+
+    def supervisor_result(self, binding, outcome):
+        if outcome not in OUTCOMES: raise OwnershipError('Invalid supervisor outcome')
+        with self._session(binding['customer']) as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT * FROM resource_ownership WHERE attempt=?',(binding['attempt'],)).fetchone()
+            if row is None or any(row[k] != binding[k] for k in FIELDS):
+                raise OwnershipError('Supervisor binding mismatch')
+            db.execute('INSERT INTO supervisor_results VALUES (?,?) ON CONFLICT(attempt) DO UPDATE SET outcome=excluded.outcome',
+                       (binding['attempt'],outcome))
+            self._commit(db)
+
+    def supervisor_outcomes(self, customer):
+        with self._session(customer) as db:
+            return dict(db.execute('SELECT attempt,outcome FROM supervisor_results'))
+
+    def leases(self, customer):
+        with self._session(customer) as db:
+            return [dict(r) for r in db.execute('SELECT * FROM execution_leases')]
+
+    @contextmanager
+    def execution_lease(self, customer, task, execution):
+        # No PID/clock-based death inference. No re-adoption of an execution ID.
+        probe = dict(customer=customer,task=task,execution=execution,attempt='a'*32,
+                     proof='b'*32,kind='container',state='not_sent',resource=None)
+        self._validate(probe,customer)
+        self.leases(customer)  # Initialize/validate schema before opening the lease file.
+        fd = None
+        try:
+            with self._files(customer) as (directory, _, __):
+                fd = os.open('execution-'+execution+'.lock',os.O_RDWR|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory)
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                info = os.fstat(fd)
+            with self._session(customer) as db:
+                db.execute('BEGIN IMMEDIATE')
+                if db.execute('SELECT count(*) FROM execution_leases').fetchone()[0]>=MAX_RECORDS:
+                    raise OwnershipError('Lease budget exceeded')
+                db.execute('INSERT INTO execution_leases VALUES (?,?,?,?)',(execution,task,info.st_dev,info.st_ino))
+                self._commit(db)
+            yield
+        finally:
+            if fd is not None: os.close(fd)
+
+    @contextmanager
+    def orphan_claim(self, customer, lease):
+        from coordinator import _private
+        if os.getpid()!=self.pid or self.poisoned:
+            raise OwnershipError('Resource ownership store unavailable')
+        fd = None
+        try:
+            with self._files(customer) as (directory, _, __):
+                fd = os.open('execution-'+lease['execution']+'.lock',os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+                info=os.fstat(fd); _private(info)
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink!=1
+                        or (info.st_dev,info.st_ino)!=(lease['device'],lease['inode'])):
+                    raise OwnershipError('Execution lease identity changed')
+                try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                except BlockingIOError:
+                    os.close(fd);fd=None
+            yield fd is not None
+        finally:
+            if fd is not None: os.close(fd)

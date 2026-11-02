@@ -95,7 +95,7 @@ yayına çıkış gerekçesi değildir; çok süreçli dağıtım için ayrıca 
 | 5.2 Süreli oturum ve her istekte yetkilendirme | prototip / P0 / 5 | 5.1, güvenilir yerel fixture sağlayıcısı | Süre sonu/iptal/hesap kapanması/kimlik yeniden atama erişimi reddeder; okuma dosya değiştirmez; sonuç öncesi yetki yeniden kontrol edilir; restart/fork eski tokenı geçerli kılmaz; 1000 oturum sınırı ve saat hataları sınanır. | [Erişim](../examples/offline-seo/isolation/access_control.py), [oturum belgesi](../examples/offline-seo/isolation/SESSION_SECURITY.md), [erişim testi](../tests/test_offline_access.py), [oturum testi](../tests/test_offline_sessions.py) |
 | 5.3 Süreç içi iptal ve SQLite kontrol maliyeti | prototip / P0 / 5 | 5.1–5.2, 2.1 | İptal ile Popen kısa kilitte sıralanır; gönderilmemiş create/import sahte stop_failed üretmez; gönderilmiş belirsiz sonuç unutulmaz; gerçek durma doğrulanır; müşteriler etkilenmez. Aynı kilitli kapsamda kontrol tekrarı azalırken sonraki istekte güncel yetki/depo kontrol edilir. | [Kontrol](../examples/offline-seo/isolation/execution_control.py), [iptal belgesi](../examples/offline-seo/isolation/CANCELLATION.md), [iptal testi](../tests/test_offline_cancellation.py), [başlatma testi](../tests/test_offline_dispatch.py) |
 | 5.4 Kalıcı görev–Docker kaynak sahipliği | prototip / P0 / 5 | 3.1, 5.3; mevcut özeti ve kilitleri koruyan kayıt tasarımı | Müşteri, görev, benzersiz yürütme ve kaynak kimliği güvenilir kayıtta bağlanır; niyet gönderimden önce kalıcıdır; not_sent/sent_unconfirmed/identified ayrımı restart sonrası korunur; eksik/çelişkili sahiplikte başka kaynak durdurulmaz; create/import öncesi/sonrası öldürme testleri geçer. Docker ile SQLite arasında atomiklik varsayılmaz. | Başlangıç: [runner](../examples/offline-seo/isolation/runner.py), [koordinatör](../examples/offline-seo/isolation/coordinator.py), [yaşam döngüsü testleri](../tests/test_offline_dispatch.py), [kalıcı depo ve Docker testleri](../tests/test_offline_resource_store.py), [kabul kanıtı ve sınırlar](../examples/offline-seo/isolation/RESOURCE_OWNERSHIP.md) |
-| 5.5 SIGKILL sonrası dış supervisor | planlandı / P0 / 5 | 5.4, 2.2; ana süreçten bağımsız yaşam döngüsü | Gerçek ana süreç SIGKILL testinde işçi bulunur; kayıt ve Docker sahipliği eşleşir; başka müşterinin/asıl görevin işçisi etkilenmez; kontrollü/zorunlu durma inspect ile doğrulanır; doğrulanamayan durum hata olur. Yeniden PID kullanımına güvenilmez; süre hedefi testte ölçülür. | Açık sınır: [iptal belgesi](../examples/offline-seo/isolation/CANCELLATION.md) |
+| 5.5 SIGKILL sonrası dış supervisor | prototip / P0 / 5 | 5.4, 2.2; ana süreçten bağımsız yaşam döngüsü | Gerçek ana süreç SIGKILL testinde işçi bulunur; kayıt ve Docker sahipliği eşleşir; başka müşterinin/asıl görevin işçisi etkilenmez; kontrollü/zorunlu durma inspect ile doğrulanır; doğrulanamayan durum hata olur. Yeniden PID kullanımına güvenilmez; süre hedefi testte ölçülür. | [Supervisor ve sınırlar](../examples/offline-seo/isolation/SUPERVISOR.md), [kod](../examples/offline-seo/isolation/supervisor.py), [testler](../tests/test_offline_supervisor.py) |
 | 5.6 Artık kaynak uzlaştırma ve operatör uyarıları | planlandı / P0 / 5 | 5.4–5.5, 5.7 kayıt sözleşmesi | Daemon kesintisi, lost reply ve stop/cleanup hatası kalıcı görünür; tekrar uzlaştırma idempotent olur; yalnızca doğrulanmış kaynaklar temizlenir, genel prune yoktur; çözülemeyen kaynaklar güvenilir operatöre bildirilir; görev yanlış başarılı gösterilmez. | Başlangıç: [mevcut temizleme](../examples/offline-seo/isolation/runner.py), [hata testleri](../tests/test_offline_dispatch.py) |
 | 5.7 Kalıcı güvenlik ve yönetici denetim kayıtları | planlandı / P0 / 5 | 5.1, olay/veri saklama politikası | Kimlik/üyelik değişimi, erişim reddi, iptal ve kaynak hataları işlem kimliğiyle izlenir; sır/token/ham rapor yazılmaz; müşteri ayrımı, erişim izinleri, saklama/boyut sınırı ve silme politikası test edilir; kayıt arızasında kritik işlemin davranışı tanımlıdır. Mevcut bellek kuyruğu kalıcı kayıt sayılmaz. | Başlangıç: [erişim olayları](../examples/offline-seo/isolation/access_control.py), [yönetici hata kayıtları](../examples/offline-seo/isolation/coordinator.py) |
 | 5.8 Yedekleme, güvenli kurtarma ve şema geçişleri | planlandı / P0 / 5 | 5.1, 5.4, 5.7; RPO/RTO ve anahtar sorumlusu | Tutarlı SQLite yedeği alınır; ayrı ortamda geri yükleme provası veri kaybı/süre hedefini ölçer; iptal edilmiş yetki ve oturum geri gelmez; eski/bozuk şema otomatik sıfırlanmaz; şifreleme, erişim ve anahtar kurtarma prosedürü sınanır. Kaynak kayıtları Docker gerçeğiyle uzlaştırılmadan görev başlatılmaz. | Mevcut sınır: [kimlik deposu](../examples/offline-seo/isolation/IDENTITY_STORE.md), [koordinatör](../examples/offline-seo/isolation/COORDINATOR.md) |
@@ -214,3 +214,24 @@ Eski deneysel kaynak biçimi otomatik dönüştürülmez veya silinmez. Bu güve
 sıkılaştırması üretime hazır olunduğu anlamına gelmez: 5.4 **prototip** olarak
 kalır; yeni bağımsız inceleme bekler. 5.5 dış supervisor ve diğer açık güvenlik
 kapıları bu geliştirmede uygulanmadı.
+
+
+### 5.5 çevrimdışı supervisor prototipi
+
+5.4'ün yukarıdaki kabul/takip kayıtları tarihsel başlangıç durumudur. Yeni 5.5
+prototipi aynı sahiplik SQLite'ını kullanır; bağımsız OS sürecidir. Coordinator'ın
+SIGKILL ile ölmesi gerçek subprocess/Docker testinde sınanır. Kernel execution
+kilidi aktif görevi korur; PID veya kayıt yaşı ölüm kanıtı değildir. Tam Docker ID
+ve altı sahiplik alanı doğrulanmadan durdurma/silme yapılmaz. İki müşterinin aynı
+görev ID'si ve sağlıklı ikinci koordinatörün korunması test edilir.
+
+Kanıtlanan kapsam: tek host/yerel Linux dosya sistemi; kontrollü stop, gerekirse
+kill, inspect ile durma ve tam ID'nin kaldırılmasının doğrulanması; kalıcı review
+ve tekrar tarama güvenliği. Bu nedenle 5.5 **prototip** olarak işaretlenir, üretime
+hazır değildir. Ayrıntılı sonuç/süre ve sınırlar [supervisor belgesindedir](../examples/offline-seo/isolation/SUPERVISOR.md).
+
+Eksikler: supervisor servis kurulumu/otomatik restart, host reboot/çok host,
+tam artık imaj/unknown kaynak uzlaştırması, kalıcı operatör uyarıları ve güvenilir
+review çözüm aracı yoktur. Bunlar 5.6/5.7/5.8 ve ilgili operasyon kapılarıdır.
+Eski kayıtlara yaşam kilidi uydurulmaz. Çok süreçli oturum/üyelik iptali 5.11'de
+ayrı kalır. Gerçek OIDC/API veya canlı uygulama yeteneği eklenmedi.

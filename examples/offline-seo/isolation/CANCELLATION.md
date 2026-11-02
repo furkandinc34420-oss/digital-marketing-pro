@@ -142,3 +142,14 @@ boolean olarak doğrulanır; bozuk veya yeniden başlamakta olan durum durdu say
 [Kalıcı Docker kaynak sahipliği](RESOURCE_OWNERSHIP.md), host tarafında müşteri,
 görev ve yürütmeyi Docker etiketleriyle doğrulanmış kaynaklara bağlar.
 Süreç ölümü belirsiz kaynakları otomatik temizlemez; dış supervisor henüz yoktur.
+
+
+## 5.5 ile eklenen bağımsız gözetim
+
+Yukarıdaki 5.4/5.3 sınırları o aşamaların kapsamıdır. [5.5 supervisor prototipi](SUPERVISOR.md)
+artık coordinator tarafından başlatılmayan ayrı host sürecinde çalışabilir.
+Aynı kaynak deposunun doğrulanmış v1 şeması transaction ile v2'ye genişletilir;
+sahiplik kanıtları ve eski yaşam döngüsü korunur. Yürütme kilidi olmayan eski
+kayıtlar otomatik durdurulmaz. Docker durması/kaldırılması doğrulanmadan başarı
+yazılmaz. İmaj uzlaştırması, servis deployment'ı ve süreçler arası oturum iptali
+eklenmedi. İşçilerin host DB/socket erişim sınırı değişmedi.

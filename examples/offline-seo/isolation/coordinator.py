@@ -22,7 +22,7 @@ from runner import CUSTOMERS, DockerLab, MAX_COMMAND_OUTPUT
 from content_schema import validate_content_result
 from technical_schema import validate_technical_result
 import audit_report
-from resource_store import resource_scope
+from resource_store import resource_scope, ResourceStore
 from execution_control import checkpoint, current, TaskCancelled, publication
 
 
@@ -449,7 +449,8 @@ class Coordinator:
             try:
                 checkpoint()
                 execution = current().execution_id if current() is not None else uuid.uuid4().hex
-                with resource_scope(self.store.root / 'docker-resources', customer, task_id, execution):
+                with resource_scope(self.store.root / 'docker-resources', customer, task_id, execution), ResourceStore(
+                        self.store.root / 'docker-resources').execution_lease(customer, task_id, execution):
                     if operation == 'seo.audit':
                         result = self._run_audit(db, customer, task_id, snapshots)
                     else:
